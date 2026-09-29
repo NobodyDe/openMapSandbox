@@ -1,10 +1,11 @@
 import { useState } from "react";
 
-export function useHiddenIds() {
-  const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(new Set());
+// Conjunto de ids ligados/desligados: ocultos (pontos, trechos) ou ativos (modelos 3D)
+export function useToggleSet() {
+  const [ids, setIds] = useState<ReadonlySet<string>>(new Set());
 
   function toggle(id: string) {
-    setHiddenIds((prev) => {
+    setIds((prev) => {
       const next = new Set(prev); // cópia: o React só re-renderiza se a referência mudar
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -13,8 +14,8 @@ export function useHiddenIds() {
   }
 
   function reset() {
-    setHiddenIds(new Set());
+    setIds(new Set());
   }
 
-  return { hiddenIds, toggle, reset };
+  return { ids, toggle, reset };
 }
