@@ -10,15 +10,10 @@ import MapGL, {
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useBasemapBuildingMask } from "./useBasemapBuildingMask";
 import { ProjectionToggle, type MapProjection } from "./ProjectionToggle";
+import { atmosphereLight, atmosphereSky } from "./atmosphere";
+import { hideBasemapLabelsBelow, LABELS_MIN_ZOOM } from "./basemapLabels";
 import { municipalityBordersUrl } from "../../lib/ibge";
-import {
-  Suspense,
-  lazy,
-  useCallback,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { Suspense, lazy, useCallback, useMemo, useRef, useState } from "react";
 import { KmzPointsInput } from "../points/KmzPointsInput";
 import { PointsLayer } from "../points/PointsLayer";
 import { PointPopup } from "../points/PointPopup";
@@ -47,6 +42,9 @@ import { Model3dCalibration } from "../models3d/Model3dCalibration";
 
 // three + fragments (~2 MB) só são baixados quando o primeiro modelo é ligado
 const Model3dLayer = lazy(() => import("../models3d/Model3dLayer"));
+// three só é baixado quando o satélite é ligado (mesmo pedaço do Model3dLayer)
+const StarsLayer = lazy(() => import("../stars/StarsLayer"));
+const GlobeShadowLayer = lazy(() => import("../globeShadow/GlobeShadowLayer"));
 
 const BASEMAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
 const BRAZIL_VIEW = { longitude: -47.93, latitude: -15.78, zoom: 4 };
@@ -78,10 +76,13 @@ export function MapView() {
     reset: resetHiddenTrechos,
   } = useToggleSet();
   const { ids: enabledModelIds, toggle: toggleModel } = useToggleSet();
-  const [modelStatus, setModelStatus] = useState<Record<string, ModelStatus>>({});
+  const [modelStatus, setModelStatus] = useState<Record<string, ModelStatus>>(
+    {},
+  );
   // useCallback: é dependência do efeito do Model3dLayer; uma função nova a cada render recarregaria o modelo
   const handleModelStatus = useCallback(
-    (id: string, status: ModelStatus) => setModelStatus((prev) => ({ ...prev, [id]: status })),
+    (id: string, status: ModelStatus) =>
+      setModelStatus((prev) => ({ ...prev, [id]: status })),
     [],
   );
 
@@ -101,11 +102,15 @@ export function MapView() {
 
   function moveAnchorToMapCenter(id: string) {
     const center = mapRef.current?.getCenter();
-    if (center) updateAnchor(id, { ...anchors[id], lng: center.lng, lat: center.lat });
+    if (center)
+      updateAnchor(id, { ...anchors[id], lng: center.lng, lat: center.lat });
   }
 
   function flyToAnchor(anchor: Anchor) {
-    mapRef.current?.flyTo({ center: [anchor.lng, anchor.lat], ...MODEL_CAMERA });
+    mapRef.current?.flyTo({
+      center: [anchor.lng, anchor.lat],
+      ...MODEL_CAMERA,
+    });
   }
 
   // Prédios do mapa base substituídos pelos modelos ligados. Uma máscara só para todos:
@@ -113,7 +118,9 @@ export function MapView() {
   const basemapMask = useMemo(() => {
     const enabled = MODELS_3D.filter((model) => enabledModelIds.has(model.id));
     return {
-      hiddenIds: enabled.flatMap((model) => model.hiddenBasemapBuildingIds ?? []),
+      hiddenIds: enabled.flatMap(
+        (model) => model.hiddenBasemapBuildingIds ?? [],
+      ),
       clearAreas: enabled.flatMap((model) => model.basemapClearAreas ?? []),
     };
   }, [enabledModelIds]);
@@ -140,7 +147,10 @@ export function MapView() {
   const selectedTrecho = selected && trechosById.get(selected.id);
 
   return (
-    <div className="relative h-screen w-full">
+    // Com satélite, fundo escuro: no globo é o "espaço" atrás da esfera, onde o halo (claro) aparece
+    <div
+      className={`relative h-screen w-full ${satellite ? "bg-[#010101]" : ""}`}
+    >
       <div className="absolute left-3 top-3 z-10 flex gap-2">
         <button
           type="button"
@@ -197,7 +207,8 @@ export function MapView() {
                     onToggle={toggleModel}
                   />
                   {MODELS_3D.filter(
-                    (model) => enabledModelIds.has(model.id) && anchors[model.id],
+                    (model) =>
+                      enabledModelIds.has(model.id) && anchors[model.id],
                   ).map((model) => (
                     <section key={model.id}>
                       <h3 className="px-3 pt-2 text-xs font-semibold text-slate-500">
@@ -231,7 +242,10 @@ export function MapView() {
       </div>
       <MapGL
         ref={mapRef}
+        onLoad={(event) => hideBasemapLabelsBelow(event.target, LABELS_MIN_ZOOM)}
         projection={projection}
+        sky={atmosphereSky(satellite)} // a atmosfera acompanha o botão de satélite
+        light={atmosphereLight(satellite)} // e o "sol" dela fica atrás da câmera
         initialViewState={BRAZIL_VIEW}
         mapStyle={BASEMAP_STYLE}
         interactiveLayerIds={[TRECHOS_HIT_LAYER_ID]}
@@ -277,15 +291,20 @@ export function MapView() {
 
         {/* Sem beforeId: o modelo fica acima de ruas, satélite e trechos; os pinos (DOM) seguem por cima */}
         <Suspense fallback={null}>
-          {MODELS_3D.filter((model) => enabledModelIds.has(model.id)).map((config) => (
-            <Model3dLayer
-              key={config.id}
-              config={config}
-              anchor={anchors[config.id]}
-              onAnchorResolved={handleAnchorResolved}
-              onStatusChange={handleModelStatus}
-            />
-          ))}
+          {/* estrelas, sombra da noite, atmosfera e fundo escuro: todos seguem o satélite */}
+          {satellite && <StarsLayer />}
+          {satellite && <GlobeShadowLayer />}
+          {MODELS_3D.filter((model) => enabledModelIds.has(model.id)).map(
+            (config) => (
+              <Model3dLayer
+                key={config.id}
+                config={config}
+                anchor={anchors[config.id]}
+                onAnchorResolved={handleAnchorResolved}
+                onStatusChange={handleModelStatus}
+              />
+            ),
+          )}
         </Suspense>
 
         <NavigationControl position="top-right" />
