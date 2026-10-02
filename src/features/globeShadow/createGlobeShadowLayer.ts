@@ -1,16 +1,14 @@
 import type { CustomLayerInterface } from "maplibre-gl";
 import {
-  Matrix4,
   Mesh,
   PerspectiveCamera,
   Scene,
   ShaderMaterial,
   SphereGeometry,
   Vector3,
-  Vector4,
   WebGLRenderer,
 } from "three";
-import { SUN_VIEW_DIRECTION } from "../map/atmosphere";
+import { readGlobeCamera } from "../map/globeCamera";
 
 const MAX_DARKNESS = 0.8; // 1 = noite totalmente preta
 // O globo tem raio 1 no espaço do MapLibre. A esfera fica só um fio acima (≈ 640 m) e bem
@@ -62,31 +60,8 @@ export function createGlobeShadowLayer(id: string): CustomLayerInterface {
   const sunDirection = new Vector3();
   const sphere = createShadowSphere(sunDirection);
   scene.add(sphere);
-  const inverse = new Matrix4();
-  const eye = new Vector4();
-  const center = new Vector3();
-  const right = new Vector3();
-  const up = new Vector3();
-  const toViewer = new Vector3();
-  const [sunX, sunY, sunZ] = SUN_VIEW_DIRECTION;
+  const eye = new Vector3(); // a sombra só precisa do sol, mas a leitura devolve os dois
   let renderer: WebGLRenderer | null = null;
-
-  // O sol é definido em relação à tela (direita, cima, em direção a quem olha). Para usar no
-  // globo, monta esses três eixos no espaço do globo "desprojetando" pontos da tela
-  const updateSunDirection = () => {
-    inverse.copy(camera.projectionMatrix).invert();
-    eye.set(0, 0, 1, 0).applyMatrix4(inverse); // posição da câmera: o ponto que a matriz leva para w = 0
-    center.set(0, 0, 0).applyMatrix4(inverse); // centro da tela
-    right.set(1, 0, 0).applyMatrix4(inverse).sub(center).normalize(); // borda direita da tela
-    up.set(0, 1, 0).applyMatrix4(inverse).sub(center).normalize(); // borda de cima da tela
-    toViewer.set(eye.x / eye.w, eye.y / eye.w, eye.z / eye.w).sub(center).normalize();
-    sunDirection
-      .set(0, 0, 0)
-      .addScaledVector(right, sunX)
-      .addScaledVector(up, sunY)
-      .addScaledVector(toViewer, sunZ)
-      .normalize();
-  };
 
   // closures, não `this`: o <Layer> do react-map-gl repassa uma CÓPIA do objeto
   return {
@@ -101,7 +76,7 @@ export function createGlobeShadowLayer(id: string): CustomLayerInterface {
       // Só com o globo "inteiro": na transição para o plano (zoom 11–12) a esfera não casaria com o mapa
       if (!renderer || projectionTransition < 1) return;
       camera.projectionMatrix.fromArray(mainMatrix);
-      updateSunDirection(); // a câmera mudou: o sol, preso a ela, também
+      readGlobeCamera(camera.projectionMatrix, eye, sunDirection); // o sol, preso à câmera, muda com ela
       renderer.resetState();
       renderer.render(scene, camera);
     },

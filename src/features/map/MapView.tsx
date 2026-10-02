@@ -39,12 +39,15 @@ import {
 } from "../models3d/models";
 import { Models3dList } from "../models3d/Models3dList";
 import { Model3dCalibration } from "../models3d/Model3dCalibration";
+import { PlaceSearch } from "../search/PlaceSearch";
+import { flyToPlace } from "../search/searchPlace";
 
 // three + fragments (~2 MB) só são baixados quando o primeiro modelo é ligado
 const Model3dLayer = lazy(() => import("../models3d/Model3dLayer"));
 // three só é baixado quando o satélite é ligado (mesmo pedaço do Model3dLayer)
 const StarsLayer = lazy(() => import("../stars/StarsLayer"));
 const GlobeShadowLayer = lazy(() => import("../globeShadow/GlobeShadowLayer"));
+const GlobeGlowLayer = lazy(() => import("../globeGlow/GlobeGlowLayer"));
 
 const BASEMAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
 const BRAZIL_VIEW = { longitude: -47.93, latitude: -15.78, zoom: 4 };
@@ -151,6 +154,7 @@ export function MapView() {
     <div
       className={`relative h-screen w-full ${satellite ? "bg-[#010101]" : ""}`}
     >
+      <PlaceSearch onFound={(place) => mapRef.current && flyToPlace(mapRef.current, place)} />
       <div className="absolute left-3 top-3 z-10 flex gap-2">
         <button
           type="button"
@@ -291,8 +295,11 @@ export function MapView() {
 
         {/* Sem beforeId: o modelo fica acima de ruas, satélite e trechos; os pinos (DOM) seguem por cima */}
         <Suspense fallback={null}>
-          {/* estrelas, sombra da noite, atmosfera e fundo escuro: todos seguem o satélite */}
+          {/* estrelas, brilho da borda, sombra da noite, atmosfera e fundo escuro: todos seguem o satélite */}
           {satellite && <StarsLayer />}
+          {/* depois das estrelas: as duas entram antes do "background", e a ordem de montagem
+              deixa o brilho por cima delas */}
+          {satellite && <GlobeGlowLayer />}
           {satellite && <GlobeShadowLayer />}
           {MODELS_3D.filter((model) => enabledModelIds.has(model.id)).map(
             (config) => (
