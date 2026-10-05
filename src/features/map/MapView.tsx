@@ -10,11 +10,11 @@ import MapGL, {
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useBasemapBuildingMask } from "./useBasemapBuildingMask";
 import { ProjectionToggle, type MapProjection } from "./ProjectionToggle";
+import { CONTROL_ICON_SIZE, MapControlButton } from "./MapControlButton";
 import { atmosphereLight, atmosphereSky } from "./atmosphere";
 import { hideBasemapLabelsBelow, LABELS_MIN_ZOOM } from "./basemapLabels";
 import { municipalityBordersUrl } from "../../lib/ibge";
 import { Suspense, lazy, useCallback, useMemo, useRef, useState } from "react";
-import { KmzPointsInput } from "../points/KmzPointsInput";
 import { PointsLayer } from "../points/PointsLayer";
 import { PointPopup } from "../points/PointPopup";
 import type { MapPoint } from "../points/types";
@@ -23,21 +23,18 @@ import { trechosToFeatureCollection } from "../trechos/trechoGeoJson";
 import { TrechosLayer, TRECHOS_HIT_LAYER_ID } from "../trechos/TrechosLayer";
 import { TrechoPopup } from "../trechos/TrechoPopup";
 import { useTrechoInteraction } from "../trechos/useTrechoInteraction";
-import type { Trecho } from "../trechos/types";
-import { KmzTrechosInput } from "../trechos/KmzTrechosInput";
 import { SatelliteLayer } from "../satellite/SatelliteLayer";
 import { SatelliteToggle } from "../satellite/SatelliteToggle";
 import { Layers } from "lucide-react";
-import { useToggleSet } from "../layers/useToggleSet";
-import { LayerList } from "../layers/LayerList";
-import { LayersAside } from "../layers/LayersAside";
+import { itemsOfKind, useLayerFolders } from "../layers/useLayerFolders";
+import { useVisibleItems } from "../layers/useVisibleItems";
+import { LayersPanel } from "../layers/LayersPanel";
 import {
-  MODELS_3D,
   MODEL_CAMERA,
   type Anchor,
+  type Model3dConfig,
   type ModelStatus,
 } from "../models3d/models";
-import { Models3dList } from "../models3d/Models3dList";
 import { Model3dCalibration } from "../models3d/Model3dCalibration";
 import { PlaceSearch } from "../search/PlaceSearch";
 import { flyToPlace } from "../search/searchPlace";
@@ -62,23 +59,16 @@ export function MapView() {
     onClick,
     closePopup,
   } = useTrechoInteraction();
-  const [trechos, setTrechos] = useState<Trecho[]>([]);
-  const [points, setPoints] = useState<MapPoint[]>([]);
   const [selectedPoint, setSelectedPoint] = useState<MapPoint | null>(null);
   const [satellite, setSatellite] = useState(false);
   const [projection, setProjection] = useState<MapProjection>("globe"); // globo por padrão
   const [layersOpen, setLayersOpen] = useState(false);
-  const {
-    ids: hiddenPointIds,
-    toggle: togglePoint,
-    reset: resetHiddenPoints,
-  } = useToggleSet();
-  const {
-    ids: hiddenTrechoIds,
-    toggle: toggleTrecho,
-    reset: resetHiddenTrechos,
-  } = useToggleSet();
-  const { ids: enabledModelIds, toggle: toggleModel } = useToggleSet();
+  // Pastas, itens e visibilidade: o painel edita, o mapa desenha
+  const layers = useLayerFolders();
+  const { folders, hiddenIds } = layers;
+  const points = useMemo(() => itemsOfKind(folders, "points"), [folders]);
+  const trechos = useMemo(() => itemsOfKind(folders, "trechos"), [folders]);
+  const models = useMemo(() => itemsOfKind(folders, "models"), [folders]);
   const [modelStatus, setModelStatus] = useState<Record<string, ModelStatus>>(
     {},
   );
@@ -116,28 +106,45 @@ export function MapView() {
     });
   }
 
+  // A lista mostra todos (para poder reexibir); o mapa recebe só os visíveis.
+  // Modelo 3D visível = carregado: ocultar descarta o modelo e libera a memória
+  const visiblePoints = useVisibleItems(points, hiddenIds);
+  const visibleTrechos = useVisibleItems(trechos, hiddenIds);
+  const visibleModels = useVisibleItems(models, hiddenIds);
+
   // Prédios do mapa base substituídos pelos modelos ligados. Uma máscara só para todos:
   // se cada modelo aplicasse a sua, o último apagaria a dos outros
-  const basemapMask = useMemo(() => {
-    const enabled = MODELS_3D.filter((model) => enabledModelIds.has(model.id));
-    return {
-      hiddenIds: enabled.flatMap(
+  const basemapMask = useMemo(
+    () => ({
+      hiddenIds: visibleModels.flatMap(
         (model) => model.hiddenBasemapBuildingIds ?? [],
       ),
-      clearAreas: enabled.flatMap((model) => model.basemapClearAreas ?? []),
-    };
-  }, [enabledModelIds]);
+      clearAreas: visibleModels.flatMap(
+        (model) => model.basemapClearAreas ?? [],
+      ),
+    }),
+    [visibleModels],
+  );
   useBasemapBuildingMask(mapRef, basemapMask);
 
-  // A lista mostra todos (para poder reexibir); o mapa recebe só os visíveis
-  const visiblePoints = useMemo(
-    () => points.filter((p) => !hiddenPointIds.has(p.id)),
-    [points, hiddenPointIds],
-  );
-  const visibleTrechos = useMemo(
-    () => trechos.filter((t) => !hiddenTrechoIds.has(t.id)),
-    [trechos, hiddenTrechoIds],
-  );
+  // Calibração aberta pelo "…" do modelo no painel. Só existe depois que o modelo carregou
+  function renderModelDetails(model: Model3dConfig) {
+    const anchor = anchors[model.id];
+    if (!anchor)
+      return (
+        <p className="text-slate-500">
+          Ligue o modelo para calibrar a posição.
+        </p>
+      );
+    return (
+      <Model3dCalibration
+        anchor={anchor}
+        onChange={(next) => updateAnchor(model.id, next)}
+        onUseMapCenter={() => moveAnchorToMapCenter(model.id)}
+        onFlyTo={() => flyToAnchor(anchor)}
+      />
+    );
+  }
 
   const trechosGeoJson = useMemo(
     () => trechosToFeatureCollection(visibleTrechos),
@@ -154,85 +161,18 @@ export function MapView() {
     <div
       className={`relative h-screen w-full ${satellite ? "bg-[#010101]" : ""}`}
     >
-      <PlaceSearch onFound={(place) => mapRef.current && flyToPlace(mapRef.current, place)} />
-      <div className="absolute left-3 top-3 z-10 flex gap-2">
-        <button
-          type="button"
-          onClick={() => setLayersOpen(true)}
-          className="flex items-center gap-1.5 rounded bg-white px-3 py-2 text-sm shadow"
-        >
-          <Layers size={16} /> Camadas
-        </button>
-        <KmzPointsInput
-          onLoad={(loaded) => {
-            setPoints(loaded);
-            resetHiddenPoints();
-          }}
-        />
-        <KmzTrechosInput
-          onLoad={(loaded) => {
-            setTrechos(loaded);
-            resetHiddenTrechos();
-          }}
-        />
-      </div>
-      {layersOpen && (
-        <LayersAside
-          onClose={() => setLayersOpen(false)}
-          tabs={[
-            {
-              label: `Pontos (${points.length})`,
-              content: (
-                <LayerList
-                  items={points}
-                  hiddenIds={hiddenPointIds}
-                  onToggleHidden={togglePoint}
-                />
-              ),
-            },
-            {
-              label: `Trechos (${trechos.length})`,
-              content: (
-                <LayerList
-                  items={trechos}
-                  hiddenIds={hiddenTrechoIds}
-                  onToggleHidden={toggleTrecho}
-                />
-              ),
-            },
-            {
-              label: "Modelos 3D",
-              content: (
-                <>
-                  <Models3dList
-                    models={MODELS_3D}
-                    enabledIds={enabledModelIds}
-                    status={modelStatus}
-                    onToggle={toggleModel}
-                  />
-                  {MODELS_3D.filter(
-                    (model) =>
-                      enabledModelIds.has(model.id) && anchors[model.id],
-                  ).map((model) => (
-                    <section key={model.id}>
-                      <h3 className="px-3 pt-2 text-xs font-semibold text-slate-500">
-                        Calibração · {model.name}
-                      </h3>
-                      <Model3dCalibration
-                        anchor={anchors[model.id]}
-                        onChange={(anchor) => updateAnchor(model.id, anchor)}
-                        onUseMapCenter={() => moveAnchorToMapCenter(model.id)}
-                        onFlyTo={() => flyToAnchor(anchors[model.id])}
-                      />
-                    </section>
-                  ))}
-                </>
-              ),
-            },
-          ]}
-        />
-      )}
+      <PlaceSearch
+        onFound={(place) => mapRef.current && flyToPlace(mapRef.current, place)}
+      />
+      {/* Coluna de controles da lateral: camadas, satélite e globo/plano, todos do mesmo tamanho */}
       <div className="absolute right-2.5 top-1/2 z-10 flex -translate-y-1/2 flex-col gap-2">
+        <MapControlButton
+          label={layersOpen ? "Fechar camadas" : "Camadas"}
+          pressed={layersOpen}
+          onClick={() => setLayersOpen((open) => !open)}
+        >
+          <Layers size={CONTROL_ICON_SIZE} />
+        </MapControlButton>
         <SatelliteToggle
           enabled={satellite}
           onToggle={() => setSatellite((v) => !v)}
@@ -244,9 +184,20 @@ export function MapView() {
           }
         />
       </div>
+      {/* Fora da coluna: ela é absolute e deslocada, e o painel se posicionaria dentro dela */}
+      {layersOpen && (
+        <LayersPanel
+          layers={layers}
+          modelStatus={modelStatus}
+          renderModelDetails={renderModelDetails}
+          onClose={() => setLayersOpen(false)}
+        />
+      )}
       <MapGL
         ref={mapRef}
-        onLoad={(event) => hideBasemapLabelsBelow(event.target, LABELS_MIN_ZOOM)}
+        onLoad={(event) =>
+          hideBasemapLabelsBelow(event.target, LABELS_MIN_ZOOM)
+        }
         projection={projection}
         sky={atmosphereSky(satellite)} // a atmosfera acompanha o botão de satélite
         light={atmosphereLight(satellite)} // e o "sol" dela fica atrás da câmera
@@ -276,7 +227,7 @@ export function MapView() {
           />
         </Source>
         <PointsLayer points={visiblePoints} onSelect={setSelectedPoint} />
-        {selectedPoint && !hiddenPointIds.has(selectedPoint.id) && (
+        {selectedPoint && !hiddenIds.has(selectedPoint.id) && (
           <PointPopup
             point={selectedPoint}
             onClose={() => setSelectedPoint(null)}
@@ -284,7 +235,7 @@ export function MapView() {
         )}
 
         <TrechosLayer data={trechosGeoJson} hoveredId={hoveredId} />
-        {selected && selectedTrecho && !hiddenTrechoIds.has(selected.id) && (
+        {selected && selectedTrecho && !hiddenIds.has(selected.id) && (
           <TrechoPopup
             trecho={selectedTrecho}
             lng={selected.lng}
@@ -301,17 +252,15 @@ export function MapView() {
               deixa o brilho por cima delas */}
           {satellite && <GlobeGlowLayer />}
           {satellite && <GlobeShadowLayer />}
-          {MODELS_3D.filter((model) => enabledModelIds.has(model.id)).map(
-            (config) => (
-              <Model3dLayer
-                key={config.id}
-                config={config}
-                anchor={anchors[config.id]}
-                onAnchorResolved={handleAnchorResolved}
-                onStatusChange={handleModelStatus}
-              />
-            ),
-          )}
+          {visibleModels.map((config) => (
+            <Model3dLayer
+              key={config.id}
+              config={config}
+              anchor={anchors[config.id]}
+              onAnchorResolved={handleAnchorResolved}
+              onStatusChange={handleModelStatus}
+            />
+          ))}
         </Suspense>
 
         <NavigationControl position="top-right" />
