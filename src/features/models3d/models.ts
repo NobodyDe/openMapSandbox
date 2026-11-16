@@ -1,9 +1,13 @@
 import type { BBox } from "../map/useBasemapBuildingMask";
 
+export type ModelFormat = "frag" | "pointcloud" | "glb";
+
 export interface Model3dConfig {
   id: string;
   name: string;
-  url: string;
+  format?: ModelFormat; // ausente = "frag" (os modelos que já existiam)
+  url?: string; // ausente enquanto o arquivo é enviado e convertido no servidor
+  localOrigin?: [number, number, number]; // ponto do arquivo que vira a origem local do modelo
   // Ajuste manual: cada campo informado vence o IfcSite (o IFC atual não tem georreferência precisa)
   position?: { lng: number; lat: number };
   altitude?: number; // metros; padrão 0 (o mapa não tem relevo)
@@ -25,8 +29,17 @@ export interface Anchor {
 // Mesmo enquadramento no voo automático e no botão "Ir até o modelo"
 export const MODEL_CAMERA = { zoom: 18, pitch: 60 } as const;
 
-// Aqui, e não no Model3dLayer: quem só lê o status não deve depender do módulo carregado sob demanda
-export type ModelStatus = "loading" | "ready" | "error";
+// Só o que já tem URL vai para o mapa
+export type LoadableModel = Model3dConfig & { url: string };
+
+// Aqui, e não no Model3dLayer: quem só lê o status não deve depender do módulo carregado sob demanda.
+// Os três primeiros vêm do envio ao servidor; os outros, da carga no mapa
+export type ModelStatus = "uploading" | "queued" | "converting" | "loading" | "ready" | "error";
+
+export interface ModelActivity {
+  status: ModelStatus;
+  text?: string; // pronto para a linha do painel: "Enviando 42% · 18 MB/s · faltam 1 min"
+}
 
 export const MODELS_3D: Model3dConfig[] = [
   {

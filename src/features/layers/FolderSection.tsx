@@ -1,6 +1,6 @@
 import { useCallback, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, Folder, Upload } from "lucide-react";
-import type { ModelStatus } from "../models3d/models";
+import type { ModelActivity } from "../models3d/models";
 import { FileImportButton } from "./FileImportButton";
 import { FOLDER_KINDS } from "./folderKinds";
 import { LayerRow } from "./LayerRow";
@@ -14,7 +14,7 @@ interface FolderSectionProps {
   open: boolean;
   onToggleOpen: () => void;
   layers: LayerFoldersState;
-  modelStatus: Record<string, ModelStatus>;
+  modelActivity: Record<string, ModelActivity>;
   renderDetails: (item: FolderItem) => ReactNode;
 }
 
@@ -24,7 +24,7 @@ export function FolderSection({
   open,
   onToggleOpen,
   layers,
-  modelStatus,
+  modelActivity,
   renderDetails,
 }: FolderSectionProps) {
   // só um item aberto por pasta: só a tabela/calibração dele existe no DOM
@@ -65,17 +65,19 @@ export function FolderSection({
         <>
           <ul>
             {items.map((item) => {
-              const hidden = layers.hiddenIds.has(item.id);
+              const activity = modelActivity[item.id];
               return (
                 <LayerRow
                   key={item.id}
                   kind={folder.kind}
                   item={item}
-                  hidden={hidden}
-                  status={hidden ? undefined : modelStatus[item.id]}
+                  hidden={layers.hiddenIds.has(item.id)}
+                  status={activity?.status}
+                  statusText={activity?.text}
                   expanded={expandedId === item.id}
                   onToggleHidden={layers.toggle}
                   onToggleExpanded={toggleExpanded}
+                  onRemove={folder.kind === "models" ? layers.removeItem : undefined}
                   details={expandedId === item.id && renderDetails(item)}
                 />
               );

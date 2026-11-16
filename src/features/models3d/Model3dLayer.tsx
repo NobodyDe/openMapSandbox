@@ -10,12 +10,12 @@ import { createFragmentsLayer } from "./createFragmentsLayer";
 import {
   MODEL_CAMERA,
   type Anchor,
-  type Model3dConfig,
+  type LoadableModel,
   type ModelStatus,
 } from "./models";
 
 interface Model3dLayerProps {
-  config: Model3dConfig;
+  config: LoadableModel;
   anchor: Anchor | undefined; // vem do MapView: é o que o painel de calibração edita
   onAnchorResolved: (id: string, anchor: Anchor) => void;
   onStatusChange: (id: string, status: ModelStatus) => void;

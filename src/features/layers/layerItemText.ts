@@ -1,5 +1,8 @@
+import type { ModelFormat } from "../models3d/models";
 import { FOLDER_KINDS } from "./folderKinds";
 import type { FolderItem, FolderKind } from "./types";
+
+const FORMAT_LABEL: Record<ModelFormat, string> = { frag: "FRAG", glb: "GLB", pointcloud: "Nuvem de pontos" };
 
 const DESCRIPTION_KEY = "DESCRIÇÃ"; // nome truncado em 10 caracteres pelo shapefile de origem
 
@@ -18,7 +21,7 @@ export function itemDescription(attributes: Record<string, string>): string {
 export function describeItem(kind: FolderKind, item: FolderItem): { label: string; detail: string } {
   const { itemType } = FOLDER_KINDS[kind];
   // Modelos 3D não têm atributos de KMZ: o "in" já separa os dois formatos para o TS
-  if (!("attributes" in item)) return { label: item.name, detail: `${itemType} · FRAG` };
+  if (!("attributes" in item)) return { label: item.name, detail: `${itemType} · ${FORMAT_LABEL[item.format ?? "frag"]}` };
   return {
     label: itemLabel(item.attributes),
     detail: `${itemType} · ${itemDescription(item.attributes) || "KMZ"}`,

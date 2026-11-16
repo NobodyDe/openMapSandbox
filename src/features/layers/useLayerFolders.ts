@@ -1,5 +1,7 @@
 import { useCallback, useState } from "react";
-import { MODELS_3D } from "../models3d/models";
+import type { JobResult } from "../conversion/api";
+import { useConversionJobs } from "../conversion/useConversionJobs";
+import { MODELS_3D, type Model3dConfig } from "../models3d/models";
 import { readLayerFile } from "./readLayerFile";
 import type { FolderItem, FolderItems, FolderKind, LayerFolder } from "./types";
 
@@ -46,6 +48,27 @@ export function useLayerFolders() {
     });
   }, []);
 
+  // Conversão pronta: o item ganha a URL do resultado e passa a poder ir para o mapa
+  const handleConverted = useCallback((itemId: string, { url, format }: JobResult) => {
+    setFolders((prev) =>
+      prev.map((f) =>
+        f.kind !== "models" ? f : { ...f, items: f.items.map((item) => (item.id === itemId ? { ...item, url, format } : item)) },
+      ),
+    );
+  }, []);
+  const { activity, start, discard } = useConversionJobs(handleConverted);
+
+  // useCallback: chega às linhas do painel (memo)
+  const removeItem = useCallback(
+    (id: string) => {
+      setFolders((prev) =>
+        prev.map((f) => ({ ...f, items: (f.items as { id: string }[]).filter((item) => item.id !== id) }) as LayerFolder),
+      );
+      discard(id); // cancela o envio/conversão e apaga a pasta do job no servidor
+    },
+    [discard],
+  );
+
   function addFolder(name: string, kind: FolderKind) {
     const folder = { id: crypto.randomUUID(), name, kind, items: [] } as LayerFolder;
     setFolders((prev) => [...prev, folder]);
@@ -63,9 +86,13 @@ export function useLayerFolders() {
     );
     // O que acabou de entrar aparece no mapa (e limpa flags antigas de ids reaproveitados)
     setHidden(items.map((item) => item.id), false);
+    // Modelo sem URL ainda precisa passar pelo servidor (.ifc, .glb, .las, .laz)
+    if (folder.kind === "models") {
+      for (const item of items as Model3dConfig[]) if (!item.url) start(item.id, file);
+    }
   }
 
-  return { folders, hiddenIds, toggle, setHidden, addFolder, importFile };
+  return { folders, hiddenIds, toggle, setHidden, addFolder, importFile, activity, removeItem };
 }
 
 export type LayerFoldersState = ReturnType<typeof useLayerFolders>;

@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { ChevronLeft, FolderPlus, Plus, Power, Search } from "lucide-react";
 import { AttributesTable } from "../../components/AttributesTable";
-import type { Model3dConfig, ModelStatus } from "../models3d/models";
+import type { Model3dConfig, ModelActivity } from "../models3d/models";
 import { AddLayerMenu } from "./AddLayerMenu";
 import { FolderSection } from "./FolderSection";
 import { describeItem } from "./layerItemText";
@@ -26,12 +26,12 @@ function filterItems(folder: LayerFolder, query: string, onlyActive: boolean, hi
 
 interface LayersPanelProps {
   layers: LayerFoldersState;
-  modelStatus: Record<string, ModelStatus>;
+  modelActivity: Record<string, ModelActivity>;
   renderModelDetails: (model: Model3dConfig) => ReactNode; // a calibração vive no MapView
   onClose: () => void;
 }
 
-export function LayersPanel({ layers, modelStatus, renderModelDetails, onClose }: LayersPanelProps) {
+export function LayersPanel({ layers, modelActivity, renderModelDetails, onClose }: LayersPanelProps) {
   const { folders, hiddenIds } = layers;
   const [query, setQuery] = useState("");
   const [tab, setTab] = useState<Tab>("all");
@@ -153,7 +153,7 @@ export function LayersPanel({ layers, modelStatus, renderModelDetails, onClose }
             open={filtering || !collapsedIds.has(folder.id)} // pesquisando: abre para mostrar o resultado
             onToggleOpen={() => toggleFolderOpen(folder.id)}
             layers={layers}
-            modelStatus={modelStatus}
+            modelActivity={modelActivity}
             renderDetails={renderDetails}
           />
         ))}

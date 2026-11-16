@@ -32,7 +32,9 @@ import { LayersPanel } from "../layers/LayersPanel";
 import {
   MODEL_CAMERA,
   type Anchor,
+  type LoadableModel,
   type Model3dConfig,
+  type ModelActivity,
   type ModelStatus,
 } from "../models3d/models";
 import { Model3dCalibration } from "../models3d/Model3dCalibration";
@@ -68,7 +70,14 @@ export function MapView() {
   const { folders, hiddenIds } = layers;
   const points = useMemo(() => itemsOfKind(folders, "points"), [folders]);
   const trechos = useMemo(() => itemsOfKind(folders, "trechos"), [folders]);
-  const models = useMemo(() => itemsOfKind(folders, "models"), [folders]);
+  // O mapa só recebe modelos com URL: os outros ainda estão no servidor
+  const models = useMemo(
+    () =>
+      itemsOfKind(folders, "models").filter(
+        (model): model is LoadableModel => model.url !== undefined,
+      ),
+    [folders],
+  );
   const [modelStatus, setModelStatus] = useState<Record<string, ModelStatus>>(
     {},
   );
@@ -126,6 +135,17 @@ export function MapView() {
     [visibleModels],
   );
   useBasemapBuildingMask(mapRef, basemapMask);
+
+  // O que a linha de cada modelo mostra: o envio/conversão, se houver; senão a carga no mapa,
+  // só dos modelos ligados (ocultar descarta o modelo, e o status antigo não vale mais)
+  const modelActivity = useMemo(() => {
+    const merged: Record<string, ModelActivity> = {};
+    for (const model of visibleModels) {
+      const status = modelStatus[model.id];
+      if (status) merged[model.id] = { status };
+    }
+    return { ...merged, ...layers.activity };
+  }, [visibleModels, modelStatus, layers.activity]);
 
   // Calibração aberta pelo "…" do modelo no painel. Só existe depois que o modelo carregou
   function renderModelDetails(model: Model3dConfig) {
@@ -188,7 +208,7 @@ export function MapView() {
       {layersOpen && (
         <LayersPanel
           layers={layers}
-          modelStatus={modelStatus}
+          modelActivity={modelActivity}
           renderModelDetails={renderModelDetails}
           onClose={() => setLayersOpen(false)}
         />

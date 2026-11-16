@@ -13,5 +13,5 @@ interface FolderKindInfo {
 export const FOLDER_KINDS: Record<FolderKind, FolderKindInfo> = {
   trechos: { label: "Trechos", itemType: "Linha", accept: ".kmz", importLabel: "Importar KMZ", icon: Spline },
   points: { label: "Pontos", itemType: "Ponto", accept: ".kmz", importLabel: "Importar KMZ", icon: MapPin },
-  models: { label: "Modelos 3D", itemType: "Modelo 3D", accept: ".frag", importLabel: "Importar modelo 3D", icon: Box },
+  models: { label: "Modelos 3D", itemType: "Modelo 3D", accept: ".frag,.ifc,.glb,.las,.laz", importLabel: "Importar modelo 3D", icon: Box },
 };
