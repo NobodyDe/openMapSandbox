@@ -20,6 +20,7 @@
     "lucide-react": "^1.48.0",
     "maplibre-gl": "^6.11.2",
     "potree-core": "^2.0.17",
+    "proj4": "^2.23.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-map-gl": "^8.1.3",
