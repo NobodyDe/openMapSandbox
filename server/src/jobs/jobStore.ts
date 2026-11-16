@@ -45,7 +45,8 @@ export function createJobStore(tmpRoot: string) {
     const job = jobs.get(id);
     if (!job) return;
     jobs.delete(id);
-    await rm(job.dir, { recursive: true, force: true });
+    // maxRetries: no Windows o processo do conversor recém-encerrado ainda segura arquivos por um instante
+    await rm(job.dir, { recursive: true, force: true, maxRetries: 5 });
   }
 
   return { create, get: (id: string) => jobs.get(id), remove };

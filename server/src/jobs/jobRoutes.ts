@@ -5,6 +5,7 @@ import { pipeline } from "node:stream/promises";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { Job, JobStore } from "./jobStore.ts";
 import { SIGNATURES, hasValidSignature } from "./magicBytes.ts";
+import type { Queue } from "./queue.ts";
 
 const MAX_FILE_SIZE = 3 * 1024 ** 3;
 const CHUNK_SIZE = 16 * 1024 ** 2;
@@ -55,7 +56,7 @@ async function writeChunk(body: Readable, path: string, start: number, maxBytes:
   return written;
 }
 
-export function registerJobRoutes(app: FastifyInstance, store: JobStore): void {
+export function registerJobRoutes(app: FastifyInstance, store: JobStore, queue: Queue): void {
   // O corpo dos pedaços chega como stream em request.raw; sem isto o Fastify recusa o tipo (415)
   app.addContentTypeParser("application/octet-stream", (_request, _payload, done) => done(null));
 
@@ -96,6 +97,7 @@ export function registerJobRoutes(app: FastifyInstance, store: JobStore): void {
       return fail(reply, 400, `O arquivo não é um ${job.ext.slice(1).toUpperCase()} válido.`);
     }
     job.status = { state: "queued", progress: null };
+    queue.enqueue(job);
     return reply.code(204).send();
   });
 
@@ -105,6 +107,7 @@ export function registerJobRoutes(app: FastifyInstance, store: JobStore): void {
   });
 
   app.delete<{ Params: { id: string } }>("/api/jobs/:id", { schema: { params: idParams } }, async (request, reply) => {
+    queue.cancel(request.params.id);
     await store.remove(request.params.id);
     return reply.code(204).send();
   });
