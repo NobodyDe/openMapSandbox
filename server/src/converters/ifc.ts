@@ -19,7 +19,10 @@ export const convertIfc: Converter = (inputPath, outDir, onProgress, signal) => 
   onProgress(null);
 
   return new Promise((resolve, reject) => {
-    worker.on("message", (progress: number) => onProgress(progress));
+    // Só números: com `node --watch`, o próprio Node manda mensagens { "watch:import" } por esta porta
+    worker.on("message", (progress: unknown) => {
+      if (typeof progress === "number") onProgress(progress);
+    });
     worker.on("error", (error) => console.error(error)); // a causa real fica no log; o usuário vê IFC_ERROR
     worker.on("exit", (code) => {
       closeSync(fd);
