@@ -20,9 +20,9 @@ function uploadText(bytesSent: number, totalBytes: number, startedAt: number): s
 }
 
 function conversionActivity({ state, progress }: JobStatus): ModelActivity {
-  if (state === "queued") return { status: "queued", text: "Na fila…" };
+  if (state === "queued") return { status: "queued", text: "Na fila…", progress: null };
   const text = progress === null ? "Convertendo…" : `Convertendo ${Math.floor(progress * 100)}%`;
-  return { status: "converting", text };
+  return { status: "converting", text, progress };
 }
 
 interface TrackedJob {
@@ -58,12 +58,16 @@ export function useConversionJobs(onDone: (itemId: string, result: JobResult) =>
 
   async function run(itemId: string, file: File, tracked: TrackedJob): Promise<void> {
     const { signal } = tracked.controller;
-    setItemActivity(itemId, { status: "uploading", text: "Enviando 0%" });
+    setItemActivity(itemId, { status: "uploading", text: "Enviando 0%", progress: 0 });
     const { jobId, chunkSize } = await createJob(file.name, file.size);
     tracked.jobId = jobId;
     const startedAt = performance.now();
     const onProgress = (bytesSent: number) =>
-      setItemActivity(itemId, { status: "uploading", text: uploadText(bytesSent, file.size, startedAt) });
+      setItemActivity(itemId, {
+        status: "uploading",
+        text: uploadText(bytesSent, file.size, startedAt),
+        progress: bytesSent / file.size,
+      });
     await uploadFile(file, jobId, chunkSize, onProgress, signal);
     await startConvert(jobId);
     const result = await waitForResult(itemId, jobId, signal);

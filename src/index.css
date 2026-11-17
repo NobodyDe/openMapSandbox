@@ -1,1 +1,6 @@
 @import "tailwindcss";
+
+/* IBM Plex Sans no app inteiro (carregada no index.html), só pesos 400 e 500 */
+@theme {
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+}

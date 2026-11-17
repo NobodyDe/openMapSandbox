@@ -39,6 +39,7 @@ export type ModelStatus = "uploading" | "queued" | "converting" | "loading" | "r
 export interface ModelActivity {
   status: ModelStatus;
   text?: string; // pronto para a linha do painel: "Enviando 42% · 18 MB/s · faltam 1 min"
+  progress?: number | null; // 0 a 1, para a linha de progresso; null = sem número
 }
 
 export const MODELS_3D: Model3dConfig[] = [

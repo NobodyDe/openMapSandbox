@@ -14,7 +14,15 @@ import { CONTROL_ICON_SIZE, MapControlButton } from "./MapControlButton";
 import { atmosphereLight, atmosphereSky } from "./atmosphere";
 import { hideBasemapLabelsBelow, LABELS_MIN_ZOOM } from "./basemapLabels";
 import { municipalityBordersUrl } from "../../lib/ibge";
-import { Suspense, lazy, useCallback, useMemo, useRef, useState } from "react";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { PointsLayer } from "../points/PointsLayer";
 import { PointPopup } from "../points/PointPopup";
 import type { MapPoint } from "../points/types";
@@ -29,11 +37,17 @@ import { Layers } from "lucide-react";
 import { mapItems } from "../projects/elements";
 import { useProjects } from "../projects/useProjects";
 import { useVisibleItems } from "../projects/useVisibleItems";
+import { ProjectsPanel } from "../projects/ProjectsPanel";
+import type { LngLat, Project } from "../projects/types";
 import {
+  MODEL_CAMERA,
   type Anchor,
   type LoadableModel,
+  type Model3dConfig,
+  type ModelActivity,
   type ModelStatus,
 } from "../models3d/models";
+import { Model3dCalibration } from "../models3d/Model3dCalibration";
 import { PlaceSearch } from "../search/PlaceSearch";
 import { flyToPlace } from "../search/searchPlace";
 
@@ -47,6 +61,7 @@ const GlobeGlowLayer = lazy(() => import("../globeGlow/GlobeGlowLayer"));
 const BASEMAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
 const BRAZIL_VIEW = { longitude: -47.93, latitude: -15.78, zoom: 4 };
 const MUNICIPALITY_MIN_ZOOM = 6; // abaixo disso as divisas viram "ruído" visual
+const PROJECT_ZOOM = 16; // voo até o projeto
 
 export function MapView() {
   const {
@@ -86,7 +101,14 @@ export function MapView() {
       ),
     [projects],
   );
-  const [, setModelStatus] = useState<Record<string, ModelStatus>>({});
+  const [modelStatus, setModelStatus] = useState<Record<string, ModelStatus>>(
+    {},
+  );
+  const [focusProjectId] = useState<string | null>(null);
+  // "Marcar no mapa": com uma função aqui, o próximo clique no mapa vira o local do projeto
+  const [pickLocation, setPickLocation] = useState<
+    ((point: LngLat) => void) | null
+  >(null);
   // useCallback: é dependência do efeito do Model3dLayer; uma função nova a cada render recarregaria o modelo
   const handleModelStatus = useCallback(
     (id: string, status: ModelStatus) =>
@@ -109,6 +131,41 @@ export function MapView() {
     [projectOfLayer, adoptLocation],
   );
 
+  function updateAnchor(id: string, anchor: Anchor) {
+    setAnchors((prev) => ({ ...prev, [id]: anchor }));
+  }
+
+  function moveAnchorToMapCenter(id: string) {
+    const center = mapRef.current?.getCenter();
+    if (center)
+      updateAnchor(id, { ...anchors[id], lng: center.lng, lat: center.lat });
+  }
+
+  function flyToAnchor(anchor: Anchor) {
+    mapRef.current?.flyTo({
+      center: [anchor.lng, anchor.lat],
+      ...MODEL_CAMERA,
+    });
+  }
+
+  function flyToProject({ location }: Project) {
+    if (location)
+      mapRef.current?.flyTo({
+        center: [location.lng, location.lat],
+        zoom: PROJECT_ZOOM,
+      });
+  }
+
+  // Esc cancela o "Marcar no mapa"
+  useEffect(() => {
+    if (!pickLocation) return;
+    const cancel = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPickLocation(null);
+    };
+    window.addEventListener("keydown", cancel);
+    return () => window.removeEventListener("keydown", cancel);
+  }, [pickLocation]);
+
   // A lista mostra todos (para poder reexibir); o mapa recebe só os visíveis.
   // Modelo 3D visível = carregado: ocultar descarta o modelo e libera a memória
   const visiblePoints = useVisibleItems(points, hiddenIds);
@@ -129,6 +186,36 @@ export function MapView() {
     [visibleModels],
   );
   useBasemapBuildingMask(mapRef, basemapMask);
+
+  // O que a linha de cada camada mostra: o envio/conversão, se houver; senão a carga no mapa,
+  // só dos modelos ligados (ocultar descarta o modelo, e o status antigo não vale mais)
+  const layerActivity = useMemo(() => {
+    const merged: Record<string, ModelActivity> = {};
+    for (const model of visibleModels) {
+      const status = modelStatus[model.id];
+      if (status) merged[model.id] = { status };
+    }
+    return { ...merged, ...projectsState.activity };
+  }, [visibleModels, modelStatus, projectsState.activity]);
+
+  // Calibração aberta pelo "…" do modelo no painel. Só existe depois que o modelo carregou
+  function renderModelDetails(model: Model3dConfig) {
+    const anchor = anchors[model.id];
+    if (!anchor)
+      return (
+        <p className="text-slate-500">
+          Ligue o modelo para calibrar a posição.
+        </p>
+      );
+    return (
+      <Model3dCalibration
+        anchor={anchor}
+        onChange={(next) => updateAnchor(model.id, next)}
+        onUseMapCenter={() => moveAnchorToMapCenter(model.id)}
+        onFlyTo={() => flyToAnchor(anchor)}
+      />
+    );
+  }
 
   const trechosGeoJson = useMemo(
     () => trechosToFeatureCollection(visibleTrechos),
@@ -168,6 +255,18 @@ export function MapView() {
           }
         />
       </div>
+      {/* Fora da coluna: ela é absolute e deslocada, e o painel se posicionaria dentro dela */}
+      {layersOpen && (
+        <ProjectsPanel
+          projects={projectsState}
+          activity={layerActivity}
+          focusProjectId={focusProjectId}
+          onPickLocation={(onPicked) => setPickLocation(() => onPicked)}
+          onFlyTo={flyToProject}
+          renderModelDetails={renderModelDetails}
+          onClose={() => setLayersOpen(false)}
+        />
+      )}
       <MapGL
         ref={mapRef}
         onLoad={(event) =>
@@ -179,10 +278,14 @@ export function MapView() {
         initialViewState={BRAZIL_VIEW}
         mapStyle={BASEMAP_STYLE}
         interactiveLayerIds={[TRECHOS_HIT_LAYER_ID]}
-        cursor={hoveredId ? "pointer" : undefined}
+        cursor={pickLocation ? "crosshair" : hoveredId ? "pointer" : undefined}
         onMouseMove={onMouseMove}
         onMouseLeave={onMouseLeave}
-        onClick={onClick}
+        onClick={(event) => {
+          if (!pickLocation) return onClick(event);
+          pickLocation({ lng: event.lngLat.lng, lat: event.lngLat.lat });
+          setPickLocation(null);
+        }}
       >
         <SatelliteLayer visible={satellite} />
         <Source

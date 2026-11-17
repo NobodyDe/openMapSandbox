@@ -38,8 +38,8 @@ function needsServer(layer: Layer): boolean {
   return layer.kind === "kmz" || !layer.model.url;
 }
 
-// Cópia: o React só re-renderiza se a referência mudar
-function toggleIn(set: ReadonlySet<string>, id: string): ReadonlySet<string> {
+// Cópia: o React só re-renderiza se a referência mudar. Também usado pelo painel (abertos/fechados)
+export function toggleIn(set: ReadonlySet<string>, id: string): ReadonlySet<string> {
   const next = new Set(set);
   if (next.has(id)) next.delete(id);
   else next.add(id);
