@@ -7,7 +7,10 @@ import type { Job, JobStore } from "./jobStore.ts";
 import { SIGNATURES, hasValidSignature } from "./magicBytes.ts";
 import type { Queue } from "./queue.ts";
 
-const MAX_FILE_SIZE = 3 * 1024 ** 3;
+const GB = 1024 ** 3;
+// A nuvem é lida por partes e aguenta mais. IFC passa inteiro pelo conversor WASM (teto de 4 GB de
+// memória) e GLB inteiro pelo navegador: acima de 3 GB falhariam depois de um envio longo
+const MAX_FILE_SIZE: Record<string, number> = { ".las": 4 * GB, ".laz": 4 * GB, ".ifc": 3 * GB, ".glb": 3 * GB };
 const CHUNK_SIZE = 16 * 1024 ** 2;
 
 const idParams = { type: "object", properties: { id: { type: "string" } } } as const;
@@ -62,10 +65,12 @@ export function registerJobRoutes(app: FastifyInstance, store: JobStore, queue: 
 
   app.post<{ Body: { name: string; size: number } }>("/api/jobs", { schema: { body: createBody } }, async (request, reply) => {
     const { name, size } = request.body;
-    if (!(extname(name).toLowerCase() in SIGNATURES)) {
+    const ext = extname(name).toLowerCase();
+    if (!(ext in SIGNATURES)) {
       return fail(reply, 400, "Formato não aceito. Use .las, .laz, .ifc ou .glb.");
     }
-    if (size > MAX_FILE_SIZE) return fail(reply, 400, "O arquivo passa do limite de 3 GB.");
+    const maxSize = MAX_FILE_SIZE[ext];
+    if (size > maxSize) return fail(reply, 400, `O arquivo passa do limite de ${maxSize / GB} GB.`);
     const job = await store.create(name, size);
     return { jobId: job.id, chunkSize: CHUNK_SIZE };
   });

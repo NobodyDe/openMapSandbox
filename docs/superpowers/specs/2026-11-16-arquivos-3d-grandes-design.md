@@ -5,7 +5,7 @@ Status: aguardando aprovação
 
 ## 1. Intenção
 
-O usuário escolhe no frontend um arquivo `.las`/`.laz`, `.ifc` ou `.glb` de até 3 GB.
+O usuário escolhe no frontend um arquivo `.las`/`.laz` de até 4 GB, ou `.ifc` ou `.glb` de até 3 GB.
 O sistema converte o arquivo e o mostra no mapa, na posição geográfica correta.
 A partir do item no mapa, o usuário abre um popup com um visualizador 3D do objeto,
 onde faz cortes e medições.
@@ -21,7 +21,7 @@ entra depois.
 
 ### Objetivos
 
-- Aceitar `.las`, `.laz`, `.ifc`, `.glb` de até 3 GB pelo painel de camadas, além do
+- Aceitar `.las`, `.laz` de até 4 GB e `.ifc`, `.glb` de até 3 GB pelo painel de camadas, além do
   `.frag` que já funciona.
 - Upload em pedaços, com progresso, velocidade e tempo restante. Falha de rede em um
   pedaço refaz só aquele pedaço.
@@ -30,7 +30,7 @@ entra depois.
   (enviando, na fila, convertendo, carregando, pronto, erro).
 - Posição automática quando o arquivo traz georreferência. Calibração manual sempre
   disponível.
-- Mapa interativo com uma nuvem de 3 GB carregada: a nuvem é lida por nível de
+- Mapa interativo com uma nuvem de 4 GB carregada: a nuvem é lida por nível de
   detalhe, com teto de pontos na tela.
 - Popup 3D para os três formatos, com órbita, cortes e medição de distância.
 
@@ -234,13 +234,13 @@ meshopt e reduz texturas para no máximo 2048 px. Saída: `model.glb`.
 
 - Extensão numa lista fixa; bytes mágicos conferidos antes de converter
   (`LASF`, `glTF`, `ISO-10303-21`).
-- Tamanho declarado limitado a 3 GB; o servidor recusa gravar além do declarado.
+- Tamanho declarado limitado a 4 GB para `.las`/`.laz` e 3 GB para `.ifc`/`.glb`; o servidor recusa gravar além do declarado.
 - Índice do pedaço dentro do intervalo esperado.
 - `jobId` é um UUID gerado pelo servidor. O caminho pedido em `/files/*` é
   resolvido e conferido para não sair da pasta `out/` do job.
 - Sem cabeçalhos CORS: frontend e API ficam na mesma origem (seção 7.1).
 
-**Aviso:** não há login. Um endpoint que aceita uploads de 3 GB sem autenticação não
+**Aviso:** não há login. Um endpoint que aceita uploads de 4 GB sem autenticação não
 pode ficar exposto à internet. Nesta fase o servidor roda local ou em rede interna.
 Publicar exige autenticação antes.
 

@@ -1,6 +1,6 @@
 import type { Job } from "./jobStore.ts";
 
-// Uma conversão por vez, em ordem de chegada: duas conversões de 3 GB juntas derrubam a máquina.
+// Uma conversão por vez, em ordem de chegada: duas conversões de 4 GB juntas derrubam a máquina.
 // `convert` não deve lançar: o estado de erro fica no próprio job
 export function createQueue(convert: (job: Job, signal: AbortSignal) => Promise<void>) {
   const waiting: Job[] = [];

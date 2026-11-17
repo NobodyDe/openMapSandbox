@@ -19,7 +19,7 @@ async function withRetries(send: () => Promise<void>, signal: AbortSignal): Prom
 }
 
 // Envia o arquivo em pedaços, 3 ao mesmo tempo. File.slice só lê do disco o pedaço da vez:
-// o arquivo inteiro (até 3 GB) nunca entra na memória do navegador
+// o arquivo inteiro (até 4 GB) nunca entra na memória do navegador
 export async function uploadFile(
   file: File,
   jobId: string,
