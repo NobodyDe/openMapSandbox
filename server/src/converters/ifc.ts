@@ -1,6 +1,7 @@
 import { closeSync, openSync } from "node:fs";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
+import { readIfcSite } from "../georef/ifcSite.ts";
 import type { Converter } from "./index.ts";
 
 const IFC_ERROR =
@@ -8,7 +9,9 @@ const IFC_ERROR =
 
 // Thread separada: o IfcImporter ocupa a CPU por minutos e travaria as rotas do servidor.
 // Cancelar = encerrar a thread, que é o único jeito de parar o WASM no meio
-export const convertIfc: Converter = (inputPath, outDir, onProgress, signal) => {
+// O centro (IfcSite) é lido antes: o arquivo original é apagado ao fim da conversão
+export const convertIfc: Converter = async (inputPath, outDir, onProgress, signal) => {
+  const center = await readIfcSite(inputPath);
   // Aberto aqui, e não na thread: encerrar a thread não fecharia o arquivo
   const fd = openSync(inputPath, "r");
   const worker = new Worker(new URL("./ifcWorker.ts", import.meta.url), {
@@ -27,7 +30,7 @@ export const convertIfc: Converter = (inputPath, outDir, onProgress, signal) => 
     worker.on("exit", (code) => {
       closeSync(fd);
       signal.removeEventListener("abort", terminate);
-      if (code === 0) resolve({ format: "frag", file: "model.frag", center: null });
+      if (code === 0) resolve({ format: "frag", file: "model.frag", center });
       else reject(new Error(signal.aborted ? "Conversão cancelada." : IFC_ERROR));
     });
   });

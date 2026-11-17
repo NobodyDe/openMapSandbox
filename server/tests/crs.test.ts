@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { epsgToProj4, gridNorthBearing, projectedToLngLat } from "../src/features/models3d/crs.ts";
+import { epsgToProj4, gridNorthBearing, projectedToLngLat } from "../src/georef/crs.ts";
 
 const near = (actual: number, expected: number, tolerance: number) =>
   assert.ok(Math.abs(actual - expected) <= tolerance, `${actual} longe de ${expected}`);

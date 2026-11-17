@@ -12,8 +12,15 @@ import type { JobStatus } from "./types.ts";
 
 const GB = 1024 ** 3;
 // A nuvem é lida por partes e aguenta mais. IFC passa inteiro pelo conversor WASM (teto de 4 GB de
-// memória) e GLB inteiro pelo navegador: acima de 3 GB falhariam depois de um envio longo
-const MAX_FILE_SIZE: Record<string, number> = { ".las": 4 * GB, ".laz": 4 * GB, ".ifc": 3 * GB, ".glb": 3 * GB };
+// memória) e GLB inteiro pelo navegador: acima de 3 GB falhariam depois de um envio longo.
+// O KMZ é descompactado inteiro na memória
+const MAX_FILE_SIZE: Record<string, number> = {
+  ".las": 4 * GB,
+  ".laz": 4 * GB,
+  ".ifc": 3 * GB,
+  ".glb": 3 * GB,
+  ".kmz": 1 * GB,
+};
 const CHUNK_SIZE = 16 * 1024 ** 2;
 const UPLOADING: JobStatus = { state: "uploading", progress: null };
 
@@ -72,7 +79,7 @@ export function registerJobRoutes(app: FastifyInstance, tmpRoot: string, store: 
     const { name, size } = request.body;
     const ext = extname(name).toLowerCase();
     if (!(ext in SIGNATURES)) {
-      return fail(reply, 400, "Formato não aceito. Use .las, .laz, .ifc ou .glb.");
+      return fail(reply, 400, "Formato não aceito. Use .kmz, .las, .laz, .ifc ou .glb.");
     }
     const maxSize = MAX_FILE_SIZE[ext];
     if (size > maxSize) return fail(reply, 400, `O arquivo passa do limite de ${maxSize / GB} GB.`);

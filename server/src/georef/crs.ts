@@ -1,4 +1,3 @@
-// Só importa proj4: o teste (tests/crs.test.ts) roda este arquivo direto no Node
 import proj4 from "proj4";
 
 const WGS84_DATUM = "+datum=WGS84";

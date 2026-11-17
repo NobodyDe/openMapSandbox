@@ -2,6 +2,7 @@ import type { Config } from "../config.ts";
 import type { ConversionOutput } from "../jobs/types.ts";
 import { convertGlb } from "./glb.ts";
 import { convertIfc } from "./ifc.ts";
+import { convertKmz } from "./kmz.ts";
 import { pointCloudConverter } from "./pointcloud.ts";
 
 // Mesma assinatura para todo formato: a fila não precisa saber qual conversor está rodando
@@ -19,6 +20,7 @@ export function converterFor(ext: string, config: Config): Converter {
     ".laz": pointCloud,
     ".ifc": convertIfc,
     ".glb": convertGlb,
+    ".kmz": convertKmz,
   };
   const converter = converters[ext];
   if (!converter) throw new Error(`Sem conversor para ${ext}.`);

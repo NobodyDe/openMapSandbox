@@ -6,6 +6,7 @@ export const SIGNATURES: Record<string, string> = {
   ".laz": "LASF",
   ".glb": "glTF",
   ".ifc": "ISO-10303-21",
+  ".kmz": "PK", // zip
 };
 
 // Evita mandar ao conversor um arquivo renomeado: o erro dele seria bem menos claro

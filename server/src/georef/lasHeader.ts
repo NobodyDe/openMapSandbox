@@ -1,4 +1,5 @@
-import { epsgToProj4, gridNorthBearing, projectedToLngLat } from "./crs";
+import { open } from "node:fs/promises";
+import { epsgToProj4, gridNorthBearing, projectedToLngLat } from "./crs.ts";
 
 export interface LasGeoref {
   localOrigin: [number, number, number]; // centro em X e Y, Z mínimo, do cabeçalho
@@ -65,10 +66,22 @@ function findCrs(vlrs: Vlr[]): { crs?: string; epsg?: number } {
   return { crs: wkt && new TextDecoder().decode(wkt.data).replace(/\0+$/, ""), epsg };
 }
 
+// Uint8Array novo, e não um Buffer do pool: readVlrs conta os offsets a partir do início do ArrayBuffer
+async function readFileStart(path: string, length: number): Promise<DataView> {
+  const file = await open(path);
+  try {
+    const bytes = new Uint8Array(length);
+    await file.read(bytes, 0, length, 0);
+    return new DataView(bytes.buffer);
+  } finally {
+    await file.close();
+  }
+}
+
 // Lê só o cabeçalho e os VLRs (alguns KB), nunca os pontos
-export async function readLasGeoref(file: File): Promise<LasGeoref> {
-  const start = new DataView(await file.slice(0, POINT_DATA_OFFSET_AT + 4).arrayBuffer());
-  const header = new DataView(await file.slice(0, start.getUint32(POINT_DATA_OFFSET_AT, true)).arrayBuffer());
+export async function readLasGeoref(path: string): Promise<LasGeoref> {
+  const start = await readFileStart(path, POINT_DATA_OFFSET_AT + 4);
+  const header = await readFileStart(path, start.getUint32(POINT_DATA_OFFSET_AT, true));
   const localOrigin = readLocalOrigin(header);
   const { crs, epsg } = findCrs(readVlrs(header));
   if (!crs) return { localOrigin, unknownEpsg: epsg };
