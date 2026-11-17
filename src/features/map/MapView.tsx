@@ -10,11 +10,19 @@ import MapGL, {
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useBasemapBuildingMask } from "./useBasemapBuildingMask";
 import { ProjectionToggle, type MapProjection } from "./ProjectionToggle";
+import { CONTROL_ICON_SIZE, MapControlButton } from "./MapControlButton";
 import { atmosphereLight, atmosphereSky } from "./atmosphere";
 import { hideBasemapLabelsBelow, LABELS_MIN_ZOOM } from "./basemapLabels";
 import { municipalityBordersUrl } from "../../lib/ibge";
-import { Suspense, lazy, useCallback, useMemo, useRef, useState } from "react";
-import { KmzPointsInput } from "../points/KmzPointsInput";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { PointsLayer } from "../points/PointsLayer";
 import { PointPopup } from "../points/PointPopup";
 import type { MapPoint } from "../points/types";
@@ -23,21 +31,23 @@ import { trechosToFeatureCollection } from "../trechos/trechoGeoJson";
 import { TrechosLayer, TRECHOS_HIT_LAYER_ID } from "../trechos/TrechosLayer";
 import { TrechoPopup } from "../trechos/TrechoPopup";
 import { useTrechoInteraction } from "../trechos/useTrechoInteraction";
-import type { Trecho } from "../trechos/types";
-import { KmzTrechosInput } from "../trechos/KmzTrechosInput";
 import { SatelliteLayer } from "../satellite/SatelliteLayer";
 import { SatelliteToggle } from "../satellite/SatelliteToggle";
 import { Layers } from "lucide-react";
-import { useToggleSet } from "../layers/useToggleSet";
-import { LayerList } from "../layers/LayerList";
-import { LayersAside } from "../layers/LayersAside";
+import { mapItems } from "../projects/elements";
+import { useProjects } from "../projects/useProjects";
+import { useVisibleItems } from "../projects/useVisibleItems";
+import { ProjectMarker } from "../projects/ProjectMarker";
+import { ProjectsPanel } from "../projects/ProjectsPanel";
+import type { LngLat, Project } from "../projects/types";
 import {
-  MODELS_3D,
   MODEL_CAMERA,
   type Anchor,
+  type LoadableModel,
+  type Model3dConfig,
+  type ModelActivity,
   type ModelStatus,
 } from "../models3d/models";
-import { Models3dList } from "../models3d/Models3dList";
 import { Model3dCalibration } from "../models3d/Model3dCalibration";
 import { PlaceSearch } from "../search/PlaceSearch";
 import { flyToPlace } from "../search/searchPlace";
@@ -52,6 +62,19 @@ const GlobeGlowLayer = lazy(() => import("../globeGlow/GlobeGlowLayer"));
 const BASEMAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
 const BRAZIL_VIEW = { longitude: -47.93, latitude: -15.78, zoom: 4 };
 const MUNICIPALITY_MIN_ZOOM = 6; // abaixo disso as divisas viram "ruído" visual
+const PROJECT_ZOOM = 16; // voo até o projeto; dali para perto o marcador cobriria o modelo
+
+// De perto, o marcador some se o projeto tem modelo ou nuvem ligado: estaria em cima dele
+function showsMarker(
+  project: Project,
+  closeZoom: boolean,
+  hiddenIds: ReadonlySet<string>,
+): boolean {
+  if (!closeZoom) return true;
+  return !project.layers.some(
+    (layer) => layer.kind === "model" && !hiddenIds.has(layer.id),
+  );
+}
 
 export function MapView() {
   const {
@@ -62,26 +85,44 @@ export function MapView() {
     onClick,
     closePopup,
   } = useTrechoInteraction();
-  const [trechos, setTrechos] = useState<Trecho[]>([]);
-  const [points, setPoints] = useState<MapPoint[]>([]);
   const [selectedPoint, setSelectedPoint] = useState<MapPoint | null>(null);
   const [satellite, setSatellite] = useState(false);
   const [projection, setProjection] = useState<MapProjection>("globe"); // globo por padrão
   const [layersOpen, setLayersOpen] = useState(false);
-  const {
-    ids: hiddenPointIds,
-    toggle: togglePoint,
-    reset: resetHiddenPoints,
-  } = useToggleSet();
-  const {
-    ids: hiddenTrechoIds,
-    toggle: toggleTrecho,
-    reset: resetHiddenTrechos,
-  } = useToggleSet();
-  const { ids: enabledModelIds, toggle: toggleModel } = useToggleSet();
+  // Projetos, camadas e visibilidade: o painel edita, o mapa desenha
+  const projectsState = useProjects();
+  const { projects, hiddenIds, hiddenMarkers, adoptLocation } = projectsState;
+  const { points, trechos, models: allModels } = useMemo(
+    () => mapItems(projects),
+    [projects],
+  );
+  // O mapa só recebe modelos com URL: os outros ainda estão no servidor
+  const models = useMemo(
+    () =>
+      allModels.filter(
+        (model): model is LoadableModel => model.url !== undefined,
+      ),
+    [allModels],
+  );
+  // Projeto de cada camada: o modelo nasce no local dele e pode dar a ele o local do arquivo
+  const projectOfLayer = useMemo(
+    () =>
+      new Map(
+        projects.flatMap((project) =>
+          project.layers.map((layer) => [layer.id, project] as const),
+        ),
+      ),
+    [projects],
+  );
   const [modelStatus, setModelStatus] = useState<Record<string, ModelStatus>>(
     {},
   );
+  const [focusProjectId, setFocusProjectId] = useState<string | null>(null);
+  const [closeZoom, setCloseZoom] = useState(false); // zoom >= PROJECT_ZOOM
+  // "Marcar no mapa": com uma função aqui, o próximo clique no mapa vira o local do projeto
+  const [pickLocation, setPickLocation] = useState<
+    ((point: LngLat) => void) | null
+  >(null);
   // useCallback: é dependência do efeito do Model3dLayer; uma função nova a cada render recarregaria o modelo
   const handleModelStatus = useCallback(
     (id: string, status: ModelStatus) =>
@@ -92,11 +133,16 @@ export function MapView() {
   // Posição/altitude/rotação de cada modelo: única fonte da verdade enquanto o app roda
   const mapRef = useRef<MapRef>(null);
   const [anchors, setAnchors] = useState<Record<string, Anchor>>({});
-  // Só grava se ainda não houver: religar o modelo mantém a calibração feita na sessão
+  // Só grava se ainda não houver: religar o modelo mantém a calibração feita na sessão.
+  // Posição vinda do próprio arquivo vira o local de um projeto que ainda não tem um
   const handleAnchorResolved = useCallback(
-    (id: string, anchor: Anchor) =>
-      setAnchors((prev) => (prev[id] ? prev : { ...prev, [id]: anchor })),
-    [],
+    (id: string, anchor: Anchor, fromFile: boolean) => {
+      setAnchors((prev) => (prev[id] ? prev : { ...prev, [id]: anchor }));
+      const project = projectOfLayer.get(id);
+      if (fromFile && project)
+        adoptLocation(project.id, { lng: anchor.lng, lat: anchor.lat });
+    },
+    [projectOfLayer, adoptLocation],
   );
 
   function updateAnchor(id: string, anchor: Anchor) {
@@ -116,28 +162,86 @@ export function MapView() {
     });
   }
 
+  function flyToProject({ location }: Project) {
+    if (location)
+      mapRef.current?.flyTo({
+        center: [location.lng, location.lat],
+        zoom: PROJECT_ZOOM,
+      });
+  }
+
+  // Marcador clicado: painel aberto no projeto e voo até ele
+  function openProject(project: Project) {
+    setLayersOpen(true);
+    setFocusProjectId(project.id);
+    flyToProject(project);
+  }
+
+  function closePanel() {
+    setLayersOpen(false);
+    setFocusProjectId(null);
+  }
+
+  // Esc cancela o "Marcar no mapa"
+  useEffect(() => {
+    if (!pickLocation) return;
+    const cancel = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPickLocation(null);
+    };
+    window.addEventListener("keydown", cancel);
+    return () => window.removeEventListener("keydown", cancel);
+  }, [pickLocation]);
+
+  // A lista mostra todos (para poder reexibir); o mapa recebe só os visíveis.
+  // Modelo 3D visível = carregado: ocultar descarta o modelo e libera a memória
+  const visiblePoints = useVisibleItems(points, hiddenIds);
+  const visibleTrechos = useVisibleItems(trechos, hiddenIds);
+  const visibleModels = useVisibleItems(models, hiddenIds);
+
   // Prédios do mapa base substituídos pelos modelos ligados. Uma máscara só para todos:
   // se cada modelo aplicasse a sua, o último apagaria a dos outros
-  const basemapMask = useMemo(() => {
-    const enabled = MODELS_3D.filter((model) => enabledModelIds.has(model.id));
-    return {
-      hiddenIds: enabled.flatMap(
+  const basemapMask = useMemo(
+    () => ({
+      hiddenIds: visibleModels.flatMap(
         (model) => model.hiddenBasemapBuildingIds ?? [],
       ),
-      clearAreas: enabled.flatMap((model) => model.basemapClearAreas ?? []),
-    };
-  }, [enabledModelIds]);
+      clearAreas: visibleModels.flatMap(
+        (model) => model.basemapClearAreas ?? [],
+      ),
+    }),
+    [visibleModels],
+  );
   useBasemapBuildingMask(mapRef, basemapMask);
 
-  // A lista mostra todos (para poder reexibir); o mapa recebe só os visíveis
-  const visiblePoints = useMemo(
-    () => points.filter((p) => !hiddenPointIds.has(p.id)),
-    [points, hiddenPointIds],
-  );
-  const visibleTrechos = useMemo(
-    () => trechos.filter((t) => !hiddenTrechoIds.has(t.id)),
-    [trechos, hiddenTrechoIds],
-  );
+  // O que a linha de cada camada mostra: o envio/conversão, se houver; senão a carga no mapa,
+  // só dos modelos ligados (ocultar descarta o modelo, e o status antigo não vale mais)
+  const layerActivity = useMemo(() => {
+    const merged: Record<string, ModelActivity> = {};
+    for (const model of visibleModels) {
+      const status = modelStatus[model.id];
+      if (status) merged[model.id] = { status };
+    }
+    return { ...merged, ...projectsState.activity };
+  }, [visibleModels, modelStatus, projectsState.activity]);
+
+  // Calibração aberta pelo "…" do modelo no painel. Só existe depois que o modelo carregou
+  function renderModelDetails(model: Model3dConfig) {
+    const anchor = anchors[model.id];
+    if (!anchor)
+      return (
+        <p className="text-slate-500">
+          Ligue o modelo para calibrar a posição.
+        </p>
+      );
+    return (
+      <Model3dCalibration
+        anchor={anchor}
+        onChange={(next) => updateAnchor(model.id, next)}
+        onUseMapCenter={() => moveAnchorToMapCenter(model.id)}
+        onFlyTo={() => flyToAnchor(anchor)}
+      />
+    );
+  }
 
   const trechosGeoJson = useMemo(
     () => trechosToFeatureCollection(visibleTrechos),
@@ -154,85 +258,18 @@ export function MapView() {
     <div
       className={`relative h-screen w-full ${satellite ? "bg-[#010101]" : ""}`}
     >
-      <PlaceSearch onFound={(place) => mapRef.current && flyToPlace(mapRef.current, place)} />
-      <div className="absolute left-3 top-3 z-10 flex gap-2">
-        <button
-          type="button"
-          onClick={() => setLayersOpen(true)}
-          className="flex items-center gap-1.5 rounded bg-white px-3 py-2 text-sm shadow"
-        >
-          <Layers size={16} /> Camadas
-        </button>
-        <KmzPointsInput
-          onLoad={(loaded) => {
-            setPoints(loaded);
-            resetHiddenPoints();
-          }}
-        />
-        <KmzTrechosInput
-          onLoad={(loaded) => {
-            setTrechos(loaded);
-            resetHiddenTrechos();
-          }}
-        />
-      </div>
-      {layersOpen && (
-        <LayersAside
-          onClose={() => setLayersOpen(false)}
-          tabs={[
-            {
-              label: `Pontos (${points.length})`,
-              content: (
-                <LayerList
-                  items={points}
-                  hiddenIds={hiddenPointIds}
-                  onToggleHidden={togglePoint}
-                />
-              ),
-            },
-            {
-              label: `Trechos (${trechos.length})`,
-              content: (
-                <LayerList
-                  items={trechos}
-                  hiddenIds={hiddenTrechoIds}
-                  onToggleHidden={toggleTrecho}
-                />
-              ),
-            },
-            {
-              label: "Modelos 3D",
-              content: (
-                <>
-                  <Models3dList
-                    models={MODELS_3D}
-                    enabledIds={enabledModelIds}
-                    status={modelStatus}
-                    onToggle={toggleModel}
-                  />
-                  {MODELS_3D.filter(
-                    (model) =>
-                      enabledModelIds.has(model.id) && anchors[model.id],
-                  ).map((model) => (
-                    <section key={model.id}>
-                      <h3 className="px-3 pt-2 text-xs font-semibold text-slate-500">
-                        Calibração · {model.name}
-                      </h3>
-                      <Model3dCalibration
-                        anchor={anchors[model.id]}
-                        onChange={(anchor) => updateAnchor(model.id, anchor)}
-                        onUseMapCenter={() => moveAnchorToMapCenter(model.id)}
-                        onFlyTo={() => flyToAnchor(anchors[model.id])}
-                      />
-                    </section>
-                  ))}
-                </>
-              ),
-            },
-          ]}
-        />
-      )}
+      <PlaceSearch
+        onFound={(place) => mapRef.current && flyToPlace(mapRef.current, place)}
+      />
+      {/* Coluna de controles da lateral: camadas, satélite e globo/plano, todos do mesmo tamanho */}
       <div className="absolute right-2.5 top-1/2 z-10 flex -translate-y-1/2 flex-col gap-2">
+        <MapControlButton
+          label={layersOpen ? "Fechar camadas" : "Camadas"}
+          pressed={layersOpen}
+          onClick={() => (layersOpen ? closePanel() : setLayersOpen(true))}
+        >
+          <Layers size={CONTROL_ICON_SIZE} />
+        </MapControlButton>
         <SatelliteToggle
           enabled={satellite}
           onToggle={() => setSatellite((v) => !v)}
@@ -244,19 +281,39 @@ export function MapView() {
           }
         />
       </div>
+      {/* Fora da coluna: ela é absolute e deslocada, e o painel se posicionaria dentro dela */}
+      {layersOpen && (
+        <ProjectsPanel
+          projects={projectsState}
+          activity={layerActivity}
+          focusProjectId={focusProjectId}
+          onPickLocation={(onPicked) => setPickLocation(() => onPicked)}
+          onFlyTo={flyToProject}
+          renderModelDetails={renderModelDetails}
+          onClose={closePanel}
+        />
+      )}
       <MapGL
         ref={mapRef}
-        onLoad={(event) => hideBasemapLabelsBelow(event.target, LABELS_MIN_ZOOM)}
+        onLoad={(event) =>
+          hideBasemapLabelsBelow(event.target, LABELS_MIN_ZOOM)
+        }
         projection={projection}
         sky={atmosphereSky(satellite)} // a atmosfera acompanha o botão de satélite
         light={atmosphereLight(satellite)} // e o "sol" dela fica atrás da câmera
         initialViewState={BRAZIL_VIEW}
         mapStyle={BASEMAP_STYLE}
         interactiveLayerIds={[TRECHOS_HIT_LAYER_ID]}
-        cursor={hoveredId ? "pointer" : undefined}
+        cursor={pickLocation ? "crosshair" : hoveredId ? "pointer" : undefined}
         onMouseMove={onMouseMove}
         onMouseLeave={onMouseLeave}
-        onClick={onClick}
+        // o React ignora o set com o mesmo valor: só re-renderiza quando o zoom cruza o limite
+        onZoom={(event) => setCloseZoom(event.viewState.zoom >= PROJECT_ZOOM)}
+        onClick={(event) => {
+          if (!pickLocation) return onClick(event);
+          pickLocation({ lng: event.lngLat.lng, lat: event.lngLat.lat });
+          setPickLocation(null);
+        }}
       >
         <SatelliteLayer visible={satellite} />
         <Source
@@ -276,7 +333,7 @@ export function MapView() {
           />
         </Source>
         <PointsLayer points={visiblePoints} onSelect={setSelectedPoint} />
-        {selectedPoint && !hiddenPointIds.has(selectedPoint.id) && (
+        {selectedPoint && !hiddenIds.has(selectedPoint.id) && (
           <PointPopup
             point={selectedPoint}
             onClose={() => setSelectedPoint(null)}
@@ -284,7 +341,7 @@ export function MapView() {
         )}
 
         <TrechosLayer data={trechosGeoJson} hoveredId={hoveredId} />
-        {selected && selectedTrecho && !hiddenTrechoIds.has(selected.id) && (
+        {selected && selectedTrecho && !hiddenIds.has(selected.id) && (
           <TrechoPopup
             trecho={selectedTrecho}
             lng={selected.lng}
@@ -301,18 +358,32 @@ export function MapView() {
               deixa o brilho por cima delas */}
           {satellite && <GlobeGlowLayer />}
           {satellite && <GlobeShadowLayer />}
-          {MODELS_3D.filter((model) => enabledModelIds.has(model.id)).map(
-            (config) => (
-              <Model3dLayer
-                key={config.id}
-                config={config}
-                anchor={anchors[config.id]}
-                onAnchorResolved={handleAnchorResolved}
-                onStatusChange={handleModelStatus}
-              />
-            ),
-          )}
+          {visibleModels.map((config) => (
+            <Model3dLayer
+              key={config.id}
+              config={config}
+              anchor={anchors[config.id]}
+              fallback={projectOfLayer.get(config.id)?.location ?? null}
+              onAnchorResolved={handleAnchorResolved}
+              onStatusChange={handleModelStatus}
+            />
+          ))}
         </Suspense>
+
+        {projects
+          .filter(
+            (project) =>
+              !hiddenMarkers.has(project.id) &&
+              showsMarker(project, closeZoom, hiddenIds),
+          )
+          .map((project) => (
+            <ProjectMarker
+              key={project.id}
+              project={project}
+              selected={project.id === focusProjectId}
+              onClick={() => openProject(project)}
+            />
+          ))}
 
         <NavigationControl position="top-right" />
         <GeolocateControl position="top-right" />

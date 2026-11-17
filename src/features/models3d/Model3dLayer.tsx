@@ -1,40 +1,42 @@
 import { useEffect, useEffectEvent, useMemo, useState } from "react";
 import { Layer, useMap } from "react-map-gl/maplibre";
-import type { FragmentsModel } from "@thatopen/fragments";
 import { Matrix4 } from "three";
-import { getFragmentsEngine } from "./fragmentsEngine";
-import { readIfcSiteLocation } from "./ifcSite";
-import { hideIfcTerrain } from "./hideIfcTerrain";
 import { buildModelMatrices, resolveAnchor, type ModelMatrices } from "./georef";
-import { createFragmentsLayer } from "./createFragmentsLayer";
+import { createThreeLayer } from "./createThreeLayer";
+import { LOADERS } from "./loaders";
+import type { LoadedModel } from "./loaders/types";
 import {
   MODEL_CAMERA,
   type Anchor,
-  type Model3dConfig,
+  type LoadableModel,
   type ModelStatus,
 } from "./models";
+import type { LngLat } from "../projects/types";
 
 interface Model3dLayerProps {
-  config: Model3dConfig;
+  config: LoadableModel;
   anchor: Anchor | undefined; // vem do MapView: é o que o painel de calibração edita
-  onAnchorResolved: (id: string, anchor: Anchor) => void;
+  fallback: LngLat | null; // local do projeto: posição de quem não traz a própria
+  // fromFile: a posição veio do arquivo (ou da config), e não do projeto nem do centro do mapa
+  onAnchorResolved: (id: string, anchor: Anchor, fromFile: boolean) => void;
   onStatusChange: (id: string, status: ModelStatus) => void;
 }
 
-interface LoadedModel {
+interface LoadedLayer {
   layerId: string;
-  model: FragmentsModel;
+  model: LoadedModel;
 }
 
 // export default: é o formato que o React.lazy espera
 export default function Model3dLayer({
   config,
   anchor,
+  fallback,
   onAnchorResolved,
   onStatusChange,
 }: Model3dLayerProps) {
   const { current: mapRef } = useMap();
-  const [loaded, setLoaded] = useState<LoadedModel | null>(null);
+  const [loaded, setLoaded] = useState<LoadedLayer | null>(null);
   // Mutáveis e compartilhadas com a camada: mudar a âncora altera ESTAS matrizes,
   // e o próximo frame já desenha o modelo no lugar novo, sem recarregar nada
   const [modelMatrices] = useState<ModelMatrices>(() => ({
@@ -42,46 +44,41 @@ export default function Model3dLayer({
     globe: new Matrix4(),
   }));
 
-  // 1) Carregar: depende só do modelo, nunca da âncora
+  // Posição, em ordem: a do arquivo → o local do projeto → o centro do mapa. useEffectEvent: lê o
+  // local ATUAL sem virar dependência; senão o projeto adotar um local recarregaria o modelo
+  const resolveLoadedAnchor = useEffectEvent((site: LngLat | null) => {
+    const center = mapRef!.getCenter(); // dentro do <MapGL> o mapa sempre existe
+    const resolved = resolveAnchor(config, site, fallback ?? { lng: center.lng, lat: center.lat });
+    onAnchorResolved(config.id, resolved, config.position !== undefined || site !== null);
+  });
+
+  // 1) Carregar: depende só do modelo, nunca da âncora. Um carregador por formato
   useEffect(() => {
-    const engine = getFragmentsEngine();
-    const modelId = `${config.id}-${crypto.randomUUID()}`; // único por montagem: o StrictMode monta 2× em dev
-    const download = new AbortController();
-    let cancelled = false;
-    let isLoaded = false;
+    const controller = new AbortController();
+    let model: LoadedModel | null = null;
     onStatusChange(config.id, "loading");
 
-    (async () => {
-      const buffer = await fetch(config.url, { signal: download.signal }).then((response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return response.arrayBuffer();
+    LOADERS[config.format ?? "frag"](config, controller.signal)
+      .then((result) => {
+        // Desmontou enquanto carregava: o cleanup não tinha o que descartar, então descarta aqui
+        if (controller.signal.aborted) return void result.dispose();
+        model = result;
+        resolveLoadedAnchor(result.site ?? null);
+        setLoaded({ layerId: `model3d-${config.id}-${crypto.randomUUID()}`, model: result });
+        onStatusChange(config.id, "ready");
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return; // inclui o AbortError do download cancelado: não é falha
+        console.error(error);
+        onStatusChange(config.id, "error");
       });
-      const model = await engine.load(buffer, { modelId });
-      isLoaded = true;
-      // Desmontou enquanto carregava: o cleanup não tinha o que descartar, então descarta aqui
-      if (cancelled) {
-        await engine.disposeModel(modelId);
-        return;
-      }
-      const site = await readIfcSiteLocation(model);
-      await hideIfcTerrain(model); // antes de a camada existir: a base nunca chega a aparecer
-      if (cancelled) return; // o cleanup já descartou (isLoaded = true)
-      onAnchorResolved(config.id, resolveAnchor(config, site));
-      setLoaded({ layerId: `model3d-${modelId}`, model });
-      onStatusChange(config.id, "ready");
-    })().catch((error: unknown) => {
-      if (cancelled) return; // inclui o AbortError do download cancelado: não é falha
-      console.error(error);
-      onStatusChange(config.id, "error");
-    });
 
     return () => {
-      cancelled = true;
-      download.abort();
-      if (isLoaded) void engine.disposeModel(modelId);
+      controller.abort();
+      if (model) void model.dispose();
       setLoaded(null); // a camada aponta para o modelo que acabou de ser descartado
     };
-  }, [config, onAnchorResolved, onStatusChange]);
+  }, [config, onStatusChange]);
 
   // 2) Posicionar: cada ajuste do painel só recalcula a matriz
   useEffect(() => {
@@ -92,7 +89,7 @@ export default function Model3dLayer({
   }, [anchor, modelMatrices]);
 
   const layer = useMemo(
-    () => loaded && createFragmentsLayer(loaded.layerId, loaded.model, modelMatrices),
+    () => loaded && createThreeLayer(loaded.layerId, loaded.model, modelMatrices),
     [loaded, modelMatrices],
   );
 

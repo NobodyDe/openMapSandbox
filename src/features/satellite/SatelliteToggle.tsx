@@ -1,4 +1,5 @@
 import { MapIcon, Satellite } from "lucide-react";
+import { CONTROL_ICON_SIZE, MapControlButton } from "../map/MapControlButton";
 
 interface SatelliteToggleProps {
   enabled: boolean;
@@ -6,17 +7,9 @@ interface SatelliteToggleProps {
 }
 
 export function SatelliteToggle({ enabled, onToggle }: SatelliteToggleProps) {
-  const label = enabled ? "Ver mapa de ruas" : "Ver satélite";
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      title={label}
-      aria-label={label}
-      aria-pressed={enabled}
-      className="rounded bg-white p-1.5 shadow hover:bg-slate-100"
-    >
-      {enabled ? <MapIcon size={18} /> : <Satellite size={18} />}
-    </button>
+    <MapControlButton label={enabled ? "Ver mapa de ruas" : "Ver satélite"} pressed={enabled} onClick={onToggle}>
+      {enabled ? <MapIcon size={CONTROL_ICON_SIZE} /> : <Satellite size={CONTROL_ICON_SIZE} />}
+    </MapControlButton>
   );
 }

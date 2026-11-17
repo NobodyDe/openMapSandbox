@@ -1,4 +1,5 @@
 import { Globe, Grid2x2 } from "lucide-react";
+import { CONTROL_ICON_SIZE, MapControlButton } from "./MapControlButton";
 
 export type MapProjection = "globe" | "mercator";
 
@@ -9,17 +10,9 @@ interface ProjectionToggleProps {
 
 export function ProjectionToggle({ projection, onToggle }: ProjectionToggleProps) {
   const isGlobe = projection === "globe";
-  const label = isGlobe ? "Ver mapa plano" : "Ver em globo";
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      title={label}
-      aria-label={label}
-      aria-pressed={isGlobe}
-      className="rounded bg-white p-1.5 shadow hover:bg-slate-100"
-    >
-      {isGlobe ? <Grid2x2 size={18} /> : <Globe size={18} />}
-    </button>
+    <MapControlButton label={isGlobe ? "Ver mapa plano" : "Ver em globo"} pressed={isGlobe} onClick={onToggle}>
+      {isGlobe ? <Grid2x2 size={CONTROL_ICON_SIZE} /> : <Globe size={CONTROL_ICON_SIZE} />}
+    </MapControlButton>
   );
 }

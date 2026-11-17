@@ -7,16 +7,16 @@ export function compoundAngleToDegrees([deg, min, sec, micro = 0]: number[]): nu
   return deg + min / 60 + (sec + micro / 1e6) / 3600;
 }
 
+// Prioridade: posição manual (ou do cabeçalho LAS) → IfcSite → fallback (o centro do mapa)
 export function resolveAnchor(
   config: Model3dConfig,
   site: { lng: number; lat: number } | null,
+  fallback: { lng: number; lat: number },
 ): Anchor {
-  const position = config.position ?? site;
-  if (!position) {
-    throw new Error(`Modelo "${config.name}" sem IfcSite e sem posição manual`);
-  }
+  const { lng, lat } = config.position ?? site ?? fallback;
   return {
-    ...position,
+    lng,
+    lat,
     altitude: config.altitude ?? 0,
     bearingDeg: config.bearingDeg ?? 0,
   };

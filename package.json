@@ -5,18 +5,18 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:server": "pnpm --dir server dev",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "start": "pnpm build && pnpm --dir server start",
+    "test": "pnpm --dir server test"
   },
   "dependencies": {
     "@thatopen/fragments": "^3.4.7",
-    "@tmcw/togeojson": "^7.1.2",
-    "@turf/turf": "^7.4.0",
-    "@xmldom/xmldom": "^0.9.12",
-    "jszip": "^3.10.2",
     "lucide-react": "^1.48.0",
     "maplibre-gl": "^6.11.2",
+    "potree-core": "^2.0.17",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-map-gl": "^8.1.3",

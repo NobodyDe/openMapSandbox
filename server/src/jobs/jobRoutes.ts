@@ -1,0 +1,141 @@
+import { createWriteStream } from "node:fs";
+import { rm } from "node:fs/promises";
+import { extname } from "node:path";
+import type { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { FastifyInstance, FastifyReply } from "fastify";
+import type { ConversionQueue } from "./conversionQueue.ts";
+import { isJobId, jobPaths } from "./jobPaths.ts";
+import type { Job, JobStore } from "./jobStore.ts";
+import { SIGNATURES, hasValidSignature } from "./magicBytes.ts";
+import type { JobStatus } from "./types.ts";
+
+const GB = 1024 ** 3;
+// A nuvem é lida por partes e aguenta mais. IFC passa inteiro pelo conversor WASM (teto de 4 GB de
+// memória) e GLB inteiro pelo navegador: acima de 3 GB falhariam depois de um envio longo.
+// O KMZ é descompactado inteiro na memória
+const MAX_FILE_SIZE: Record<string, number> = {
+  ".las": 4 * GB,
+  ".laz": 4 * GB,
+  ".ifc": 3 * GB,
+  ".glb": 3 * GB,
+  ".kmz": 1 * GB,
+};
+const CHUNK_SIZE = 16 * 1024 ** 2;
+const UPLOADING: JobStatus = { state: "uploading", progress: null };
+
+const idParams = { type: "object", properties: { id: { type: "string" } } } as const;
+const chunkParams = {
+  type: "object",
+  properties: { id: { type: "string" }, index: { type: "integer", minimum: 0 } },
+} as const;
+const createBody = {
+  type: "object",
+  required: ["name", "size"],
+  properties: { name: { type: "string" }, size: { type: "integer", minimum: 1 } },
+} as const;
+
+function chunkCount(job: Job): number {
+  return Math.ceil(job.size / CHUNK_SIZE);
+}
+
+// Todos os pedaços têm CHUNK_SIZE, menos o último
+function expectedChunkSize(job: Job, index: number): number {
+  return Math.min(CHUNK_SIZE, job.size - index * CHUNK_SIZE);
+}
+
+function fail(reply: FastifyReply, statusCode: number, message: string) {
+  return reply.code(statusCode).send({ message });
+}
+
+function notFound(reply: FastifyReply) {
+  return fail(reply, 404, "Envio não encontrado.");
+}
+
+// Grava o corpo no offset do pedaço sem guardá-lo inteiro na memória. Para no primeiro byte
+// além do esperado: passar dali escreveria em cima do pedaço seguinte
+async function writeChunk(body: Readable, path: string, start: number, maxBytes: number): Promise<number> {
+  let written = 0;
+  await pipeline(
+    body,
+    async function* (source: AsyncIterable<Buffer>) {
+      for await (const data of source) {
+        written += data.length;
+        if (written > maxBytes) throw Object.assign(new Error("Pedaço maior que o esperado."), { statusCode: 400 });
+        yield data;
+      }
+    },
+    createWriteStream(path, { flags: "r+", start }),
+  );
+  return written;
+}
+
+// Enquanto envia, o job está na memória (store); depois do convert, só na fila (Redis)
+export function registerJobRoutes(app: FastifyInstance, tmpRoot: string, store: JobStore, queue: ConversionQueue): void {
+  // O corpo dos pedaços chega como stream em request.raw; sem isto o Fastify recusa o tipo (415)
+  app.addContentTypeParser("application/octet-stream", (_request, _payload, done) => done(null));
+
+  app.post<{ Body: { name: string; size: number } }>("/api/jobs", { schema: { body: createBody } }, async (request, reply) => {
+    const { name, size } = request.body;
+    const ext = extname(name).toLowerCase();
+    if (!(ext in SIGNATURES)) {
+      return fail(reply, 400, "Formato não aceito. Use .kmz, .las, .laz, .ifc ou .glb.");
+    }
+    const maxSize = MAX_FILE_SIZE[ext];
+    if (size > maxSize) return fail(reply, 400, `O arquivo passa do limite de ${maxSize / GB} GB.`);
+    const job = await store.create(name, size);
+    return { jobId: job.id, chunkSize: CHUNK_SIZE };
+  });
+
+  app.put<{ Params: { id: string; index: number } }>(
+    "/api/jobs/:id/chunks/:index",
+    { schema: { params: chunkParams } },
+    async (request, reply) => {
+      const job = store.get(request.params.id);
+      if (!job) return notFound(reply);
+      const { index } = request.params;
+      if (index >= chunkCount(job)) return fail(reply, 400, "Pedaço fora do tamanho do arquivo.");
+      const expected = expectedChunkSize(job, index);
+      const written = await writeChunk(request.raw, job.inputPath, index * CHUNK_SIZE, expected);
+      // Um pedaço curto deixaria um buraco no arquivo; o cliente reenvia
+      if (written !== expected) return fail(reply, 400, "Pedaço incompleto.");
+      job.received.add(index); // Set: repetir o mesmo pedaço não conta duas vezes
+      return reply.code(204).send();
+    },
+  );
+
+  app.post<{ Params: { id: string } }>("/api/jobs/:id/convert", { schema: { params: idParams } }, async (request, reply) => {
+    const job = store.get(request.params.id);
+    if (!job) return notFound(reply);
+    if (job.received.size < chunkCount(job)) return fail(reply, 409, "Ainda faltam pedaços do arquivo.");
+    if (!(await hasValidSignature(job.inputPath, job.ext))) {
+      return fail(reply, 400, `O arquivo não é um ${job.ext.slice(1).toUpperCase()} válido.`);
+    }
+    await queue.add(job.id, job.ext);
+    store.delete(job.id); // só depois do add: sem Redis, o envio continua na memória e ainda pode ser apagado
+    return reply.code(204).send();
+  });
+
+  app.get<{ Params: { id: string } }>("/api/jobs/:id", { schema: { params: idParams } }, async (request, reply) => {
+    const { id } = request.params;
+    if (store.get(id)) return UPLOADING;
+    return (await queue.status(id)) ?? notFound(reply);
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/jobs/:id", { schema: { params: idParams } }, async (request, reply) => {
+    const { id } = request.params;
+    if (!isJobId(id)) return notFound(reply); // o id vira caminho de pasta logo abaixo
+    if (!store.delete(id)) await queue.cancel(id);
+    // maxRetries: no Windows o processo do conversor recém-encerrado ainda segura arquivos por um instante
+    await rm(jobPaths(tmpRoot, id).dir, { recursive: true, force: true, maxRetries: 5 });
+    return reply.code(204).send();
+  });
+
+  // sendFile (do @fastify/static) cuida de Range e recusa caminhos que saem de outDir.
+  // Não consulta memória nem fila: o arquivo continua servido depois de um reinício
+  app.get<{ Params: { id: string; "*": string } }>("/api/jobs/:id/files/*", async (request, reply) => {
+    const { id } = request.params;
+    if (!isJobId(id)) return notFound(reply);
+    return reply.sendFile(request.params["*"], jobPaths(tmpRoot, id).outDir);
+  });
+}

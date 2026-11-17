@@ -1,0 +1,13 @@
+# Redis da fila de conversão (BullMQ). Porta só na máquina local: o Redis não tem senha.
+# 6380 e não 6379: outro projeto desta máquina já usa a 6379
+services:
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    ports:
+      - "127.0.0.1:6380:6379"
+
+volumes:
+  redis-data:
