@@ -1,5 +1,5 @@
 import type { Config } from "../config.ts";
-import type { ModelFormat } from "../jobs/types.ts";
+import type { ConversionOutput } from "../jobs/types.ts";
 import { convertGlb } from "./glb.ts";
 import { convertIfc } from "./ifc.ts";
 import { pointCloudConverter } from "./pointcloud.ts";
@@ -10,7 +10,7 @@ export type Converter = (
   outDir: string,
   onProgress: (progress: number | null) => void, // 0 a 1, ou null se desconhecido
   signal: AbortSignal,
-) => Promise<{ format: ModelFormat; file: string }>; // file = arquivo principal dentro de outDir
+) => Promise<ConversionOutput>;
 
 export function converterFor(ext: string, config: Config): Converter {
   const pointCloud = pointCloudConverter(config.potreeConverterPath);

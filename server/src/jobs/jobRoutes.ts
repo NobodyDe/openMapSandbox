@@ -1,17 +1,21 @@
 import { createWriteStream } from "node:fs";
+import { rm } from "node:fs/promises";
 import { extname } from "node:path";
 import type { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { FastifyInstance, FastifyReply } from "fastify";
+import type { ConversionQueue } from "./conversionQueue.ts";
+import { isJobId, jobPaths } from "./jobPaths.ts";
 import type { Job, JobStore } from "./jobStore.ts";
 import { SIGNATURES, hasValidSignature } from "./magicBytes.ts";
-import type { Queue } from "./queue.ts";
+import type { JobStatus } from "./types.ts";
 
 const GB = 1024 ** 3;
 // A nuvem é lida por partes e aguenta mais. IFC passa inteiro pelo conversor WASM (teto de 4 GB de
 // memória) e GLB inteiro pelo navegador: acima de 3 GB falhariam depois de um envio longo
 const MAX_FILE_SIZE: Record<string, number> = { ".las": 4 * GB, ".laz": 4 * GB, ".ifc": 3 * GB, ".glb": 3 * GB };
 const CHUNK_SIZE = 16 * 1024 ** 2;
+const UPLOADING: JobStatus = { state: "uploading", progress: null };
 
 const idParams = { type: "object", properties: { id: { type: "string" } } } as const;
 const chunkParams = {
@@ -59,7 +63,8 @@ async function writeChunk(body: Readable, path: string, start: number, maxBytes:
   return written;
 }
 
-export function registerJobRoutes(app: FastifyInstance, store: JobStore, queue: Queue): void {
+// Enquanto envia, o job está na memória (store); depois do convert, só na fila (Redis)
+export function registerJobRoutes(app: FastifyInstance, tmpRoot: string, store: JobStore, queue: ConversionQueue): void {
   // O corpo dos pedaços chega como stream em request.raw; sem isto o Fastify recusa o tipo (415)
   app.addContentTypeParser("application/octet-stream", (_request, _payload, done) => done(null));
 
@@ -81,7 +86,6 @@ export function registerJobRoutes(app: FastifyInstance, store: JobStore, queue: 
     async (request, reply) => {
       const job = store.get(request.params.id);
       if (!job) return notFound(reply);
-      if (job.status.state !== "uploading") return fail(reply, 409, "O envio deste arquivo já terminou.");
       const { index } = request.params;
       if (index >= chunkCount(job)) return fail(reply, 400, "Pedaço fora do tamanho do arquivo.");
       const expected = expectedChunkSize(job, index);
@@ -96,31 +100,35 @@ export function registerJobRoutes(app: FastifyInstance, store: JobStore, queue: 
   app.post<{ Params: { id: string } }>("/api/jobs/:id/convert", { schema: { params: idParams } }, async (request, reply) => {
     const job = store.get(request.params.id);
     if (!job) return notFound(reply);
-    if (job.status.state !== "uploading") return fail(reply, 409, "A conversão deste arquivo já começou.");
     if (job.received.size < chunkCount(job)) return fail(reply, 409, "Ainda faltam pedaços do arquivo.");
     if (!(await hasValidSignature(job.inputPath, job.ext))) {
       return fail(reply, 400, `O arquivo não é um ${job.ext.slice(1).toUpperCase()} válido.`);
     }
-    job.status = { state: "queued", progress: null };
-    queue.enqueue(job);
+    await queue.add(job.id, job.ext);
+    store.delete(job.id); // só depois do add: sem Redis, o envio continua na memória e ainda pode ser apagado
     return reply.code(204).send();
   });
 
   app.get<{ Params: { id: string } }>("/api/jobs/:id", { schema: { params: idParams } }, async (request, reply) => {
-    const job = store.get(request.params.id);
-    return job ? job.status : notFound(reply);
+    const { id } = request.params;
+    if (store.get(id)) return UPLOADING;
+    return (await queue.status(id)) ?? notFound(reply);
   });
 
   app.delete<{ Params: { id: string } }>("/api/jobs/:id", { schema: { params: idParams } }, async (request, reply) => {
-    queue.cancel(request.params.id);
-    await store.remove(request.params.id);
+    const { id } = request.params;
+    if (!isJobId(id)) return notFound(reply); // o id vira caminho de pasta logo abaixo
+    if (!store.delete(id)) await queue.cancel(id);
+    // maxRetries: no Windows o processo do conversor recém-encerrado ainda segura arquivos por um instante
+    await rm(jobPaths(tmpRoot, id).dir, { recursive: true, force: true, maxRetries: 5 });
     return reply.code(204).send();
   });
 
-  // sendFile (do @fastify/static) cuida de Range e recusa caminhos que saem de outDir
+  // sendFile (do @fastify/static) cuida de Range e recusa caminhos que saem de outDir.
+  // Não consulta memória nem fila: o arquivo continua servido depois de um reinício
   app.get<{ Params: { id: string; "*": string } }>("/api/jobs/:id/files/*", async (request, reply) => {
-    const job = store.get(request.params.id);
-    if (!job) return notFound(reply);
-    return reply.sendFile(request.params["*"], job.outDir);
+    const { id } = request.params;
+    if (!isJobId(id)) return notFound(reply);
+    return reply.sendFile(request.params["*"], jobPaths(tmpRoot, id).outDir);
   });
 }

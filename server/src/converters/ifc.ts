@@ -27,7 +27,7 @@ export const convertIfc: Converter = (inputPath, outDir, onProgress, signal) => 
     worker.on("exit", (code) => {
       closeSync(fd);
       signal.removeEventListener("abort", terminate);
-      if (code === 0) resolve({ format: "frag", file: "model.frag" });
+      if (code === 0) resolve({ format: "frag", file: "model.frag", center: null });
       else reject(new Error(signal.aborted ? "Conversão cancelada." : IFC_ERROR));
     });
   });

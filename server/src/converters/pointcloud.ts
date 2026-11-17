@@ -41,6 +41,6 @@ export function pointCloudConverter(converterPath: string | undefined): Converte
   return async (inputPath, outDir, onProgress, signal) => {
     if (!converterPath) throw new Error("PotreeConverter não encontrado. Defina POTREE_CONVERTER_PATH.");
     await runPotreeConverter(converterPath, inputPath, outDir, onProgress, signal);
-    return { format: "pointcloud", file: "metadata.json" };
+    return { format: "pointcloud", file: "metadata.json", center: null };
   };
 }

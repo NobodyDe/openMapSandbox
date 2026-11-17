@@ -33,5 +33,5 @@ export const convertGlb: Converter = async (inputPath, outDir, onProgress) => {
     throw new Error("O GLB continua acima de 1 GB depois de comprimido e não cabe no navegador.");
   }
   await writeFile(join(outDir, "model.glb"), bytes);
-  return { format: "glb", file: "model.glb" };
+  return { format: "glb", file: "model.glb", center: null }; // GLB não guarda posição no mundo
 };
