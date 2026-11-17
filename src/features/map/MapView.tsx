@@ -26,18 +26,14 @@ import { useTrechoInteraction } from "../trechos/useTrechoInteraction";
 import { SatelliteLayer } from "../satellite/SatelliteLayer";
 import { SatelliteToggle } from "../satellite/SatelliteToggle";
 import { Layers } from "lucide-react";
-import { itemsOfKind, useLayerFolders } from "../layers/useLayerFolders";
-import { useVisibleItems } from "../layers/useVisibleItems";
-import { LayersPanel } from "../layers/LayersPanel";
+import { mapItems } from "../projects/elements";
+import { useProjects } from "../projects/useProjects";
+import { useVisibleItems } from "../projects/useVisibleItems";
 import {
-  MODEL_CAMERA,
   type Anchor,
   type LoadableModel,
-  type Model3dConfig,
-  type ModelActivity,
   type ModelStatus,
 } from "../models3d/models";
-import { Model3dCalibration } from "../models3d/Model3dCalibration";
 import { PlaceSearch } from "../search/PlaceSearch";
 import { flyToPlace } from "../search/searchPlace";
 
@@ -65,22 +61,32 @@ export function MapView() {
   const [satellite, setSatellite] = useState(false);
   const [projection, setProjection] = useState<MapProjection>("globe"); // globo por padrão
   const [layersOpen, setLayersOpen] = useState(false);
-  // Pastas, itens e visibilidade: o painel edita, o mapa desenha
-  const layers = useLayerFolders();
-  const { folders, hiddenIds } = layers;
-  const points = useMemo(() => itemsOfKind(folders, "points"), [folders]);
-  const trechos = useMemo(() => itemsOfKind(folders, "trechos"), [folders]);
+  // Projetos, camadas e visibilidade: o painel edita, o mapa desenha
+  const projectsState = useProjects();
+  const { projects, hiddenIds, adoptLocation } = projectsState;
+  const { points, trechos, models: allModels } = useMemo(
+    () => mapItems(projects),
+    [projects],
+  );
   // O mapa só recebe modelos com URL: os outros ainda estão no servidor
   const models = useMemo(
     () =>
-      itemsOfKind(folders, "models").filter(
+      allModels.filter(
         (model): model is LoadableModel => model.url !== undefined,
       ),
-    [folders],
+    [allModels],
   );
-  const [modelStatus, setModelStatus] = useState<Record<string, ModelStatus>>(
-    {},
+  // Projeto de cada camada: o modelo nasce no local dele e pode dar a ele o local do arquivo
+  const projectOfLayer = useMemo(
+    () =>
+      new Map(
+        projects.flatMap((project) =>
+          project.layers.map((layer) => [layer.id, project] as const),
+        ),
+      ),
+    [projects],
   );
+  const [, setModelStatus] = useState<Record<string, ModelStatus>>({});
   // useCallback: é dependência do efeito do Model3dLayer; uma função nova a cada render recarregaria o modelo
   const handleModelStatus = useCallback(
     (id: string, status: ModelStatus) =>
@@ -91,29 +97,17 @@ export function MapView() {
   // Posição/altitude/rotação de cada modelo: única fonte da verdade enquanto o app roda
   const mapRef = useRef<MapRef>(null);
   const [anchors, setAnchors] = useState<Record<string, Anchor>>({});
-  // Só grava se ainda não houver: religar o modelo mantém a calibração feita na sessão
+  // Só grava se ainda não houver: religar o modelo mantém a calibração feita na sessão.
+  // Posição vinda do próprio arquivo vira o local de um projeto que ainda não tem um
   const handleAnchorResolved = useCallback(
-    (id: string, anchor: Anchor) =>
-      setAnchors((prev) => (prev[id] ? prev : { ...prev, [id]: anchor })),
-    [],
+    (id: string, anchor: Anchor, fromFile: boolean) => {
+      setAnchors((prev) => (prev[id] ? prev : { ...prev, [id]: anchor }));
+      const project = projectOfLayer.get(id);
+      if (fromFile && project)
+        adoptLocation(project.id, { lng: anchor.lng, lat: anchor.lat });
+    },
+    [projectOfLayer, adoptLocation],
   );
-
-  function updateAnchor(id: string, anchor: Anchor) {
-    setAnchors((prev) => ({ ...prev, [id]: anchor }));
-  }
-
-  function moveAnchorToMapCenter(id: string) {
-    const center = mapRef.current?.getCenter();
-    if (center)
-      updateAnchor(id, { ...anchors[id], lng: center.lng, lat: center.lat });
-  }
-
-  function flyToAnchor(anchor: Anchor) {
-    mapRef.current?.flyTo({
-      center: [anchor.lng, anchor.lat],
-      ...MODEL_CAMERA,
-    });
-  }
 
   // A lista mostra todos (para poder reexibir); o mapa recebe só os visíveis.
   // Modelo 3D visível = carregado: ocultar descarta o modelo e libera a memória
@@ -135,36 +129,6 @@ export function MapView() {
     [visibleModels],
   );
   useBasemapBuildingMask(mapRef, basemapMask);
-
-  // O que a linha de cada modelo mostra: o envio/conversão, se houver; senão a carga no mapa,
-  // só dos modelos ligados (ocultar descarta o modelo, e o status antigo não vale mais)
-  const modelActivity = useMemo(() => {
-    const merged: Record<string, ModelActivity> = {};
-    for (const model of visibleModels) {
-      const status = modelStatus[model.id];
-      if (status) merged[model.id] = { status };
-    }
-    return { ...merged, ...layers.activity };
-  }, [visibleModels, modelStatus, layers.activity]);
-
-  // Calibração aberta pelo "…" do modelo no painel. Só existe depois que o modelo carregou
-  function renderModelDetails(model: Model3dConfig) {
-    const anchor = anchors[model.id];
-    if (!anchor)
-      return (
-        <p className="text-slate-500">
-          Ligue o modelo para calibrar a posição.
-        </p>
-      );
-    return (
-      <Model3dCalibration
-        anchor={anchor}
-        onChange={(next) => updateAnchor(model.id, next)}
-        onUseMapCenter={() => moveAnchorToMapCenter(model.id)}
-        onFlyTo={() => flyToAnchor(anchor)}
-      />
-    );
-  }
 
   const trechosGeoJson = useMemo(
     () => trechosToFeatureCollection(visibleTrechos),
@@ -204,15 +168,6 @@ export function MapView() {
           }
         />
       </div>
-      {/* Fora da coluna: ela é absolute e deslocada, e o painel se posicionaria dentro dela */}
-      {layersOpen && (
-        <LayersPanel
-          layers={layers}
-          modelActivity={modelActivity}
-          renderModelDetails={renderModelDetails}
-          onClose={() => setLayersOpen(false)}
-        />
-      )}
       <MapGL
         ref={mapRef}
         onLoad={(event) =>
@@ -277,6 +232,7 @@ export function MapView() {
               key={config.id}
               config={config}
               anchor={anchors[config.id]}
+              fallback={projectOfLayer.get(config.id)?.location ?? null}
               onAnchorResolved={handleAnchorResolved}
               onStatusChange={handleModelStatus}
             />

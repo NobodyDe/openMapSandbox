@@ -1,10 +1,20 @@
+import type { FeatureCollection } from "geojson";
 import type { ModelFormat } from "../models3d/models";
+import type { LngLat } from "../projects/types";
 
 // Redeclarados aqui: frontend e servidor não compartilham código
 export type JobState = "uploading" | "queued" | "converting" | "done" | "error";
+export interface Placement {
+  position: LngLat;
+  bearingDeg: number;
+  localOrigin: [number, number, number];
+}
 export interface JobResult {
-  format: ModelFormat;
+  format: "geojson" | ModelFormat;
   url: string;
+  center: LngLat | null; // vira o local de um projeto que ainda não tem um
+  placement?: Placement; // só nuvem com CRS reconhecido
+  warning?: string;
 }
 export interface JobStatus {
   state: JobState;
@@ -61,9 +71,14 @@ export async function startConvert(jobId: string): Promise<void> {
 
 export async function getJob(jobId: string): Promise<JobStatus> {
   const response = await send(`/api/jobs/${jobId}`);
-  // Os jobs vivem só na memória do servidor: 404 no meio da consulta = ele reiniciou
-  if (response.status === 404) throw new Error("O servidor reiniciou e o envio se perdeu. Importe de novo.");
+  // Envio interrompido por um reinício, ou job já apagado (passou de 24 h)
+  if (response.status === 404) throw new Error("Envio não encontrado no servidor. Importe de novo.");
   return (await ensureOk(response)).json();
+}
+
+// Resultado de um KMZ convertido (layer.geojson)
+export async function getGeoJson(url: string): Promise<FeatureCollection> {
+  return (await request(url)).json();
 }
 
 export async function deleteJob(jobId: string): Promise<void> {

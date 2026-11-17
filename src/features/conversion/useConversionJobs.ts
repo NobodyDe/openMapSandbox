@@ -31,7 +31,7 @@ interface TrackedJob {
 }
 
 // Envio e conversão de cada item, do arquivo escolhido até a URL do resultado
-export function useConversionJobs(onDone: (itemId: string, result: JobResult) => void) {
+export function useConversionJobs(onDone: (itemId: string, result: JobResult) => Promise<void>) {
   const [activity, setActivity] = useState<Record<string, ModelActivity>>({});
   const jobs = useRef(new Map<string, TrackedJob>());
 
@@ -68,8 +68,9 @@ export function useConversionJobs(onDone: (itemId: string, result: JobResult) =>
     await startConvert(jobId);
     const result = await waitForResult(itemId, jobId, signal);
     if (!result) return; // descartado durante a conversão
-    setItemActivity(itemId, null);
-    onDone(itemId, result);
+    await onDone(itemId, result); // o KMZ ainda baixa o GeoJSON aqui; uma falha vira erro na linha
+    // O aviso (CRS desconhecido) fica na linha; sem aviso, a linha volta ao normal
+    setItemActivity(itemId, result.warning ? { status: "ready", text: result.warning } : null);
   }
 
   // Não é useCallback: só é chamado no clique de importar, nunca vai para um memo

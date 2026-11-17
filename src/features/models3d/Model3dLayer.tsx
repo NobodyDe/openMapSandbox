@@ -11,11 +11,14 @@ import {
   type LoadableModel,
   type ModelStatus,
 } from "./models";
+import type { LngLat } from "../projects/types";
 
 interface Model3dLayerProps {
   config: LoadableModel;
   anchor: Anchor | undefined; // vem do MapView: é o que o painel de calibração edita
-  onAnchorResolved: (id: string, anchor: Anchor) => void;
+  fallback: LngLat | null; // local do projeto: posição de quem não traz a própria
+  // fromFile: a posição veio do arquivo (ou da config), e não do projeto nem do centro do mapa
+  onAnchorResolved: (id: string, anchor: Anchor, fromFile: boolean) => void;
   onStatusChange: (id: string, status: ModelStatus) => void;
 }
 
@@ -28,6 +31,7 @@ interface LoadedLayer {
 export default function Model3dLayer({
   config,
   anchor,
+  fallback,
   onAnchorResolved,
   onStatusChange,
 }: Model3dLayerProps) {
@@ -40,6 +44,14 @@ export default function Model3dLayer({
     globe: new Matrix4(),
   }));
 
+  // Posição, em ordem: a do arquivo → o local do projeto → o centro do mapa. useEffectEvent: lê o
+  // local ATUAL sem virar dependência; senão o projeto adotar um local recarregaria o modelo
+  const resolveLoadedAnchor = useEffectEvent((site: LngLat | null) => {
+    const center = mapRef!.getCenter(); // dentro do <MapGL> o mapa sempre existe
+    const resolved = resolveAnchor(config, site, fallback ?? { lng: center.lng, lat: center.lat });
+    onAnchorResolved(config.id, resolved, config.position !== undefined || site !== null);
+  });
+
   // 1) Carregar: depende só do modelo, nunca da âncora. Um carregador por formato
   useEffect(() => {
     const controller = new AbortController();
@@ -51,8 +63,7 @@ export default function Model3dLayer({
         // Desmontou enquanto carregava: o cleanup não tinha o que descartar, então descarta aqui
         if (controller.signal.aborted) return void result.dispose();
         model = result;
-        const center = mapRef!.getCenter(); // dentro do <MapGL> o mapa sempre existe
-        onAnchorResolved(config.id, resolveAnchor(config, result.site ?? null, { lng: center.lng, lat: center.lat }));
+        resolveLoadedAnchor(result.site ?? null);
         setLoaded({ layerId: `model3d-${config.id}-${crypto.randomUUID()}`, model: result });
         onStatusChange(config.id, "ready");
       })
@@ -67,7 +78,7 @@ export default function Model3dLayer({
       if (model) void model.dispose();
       setLoaded(null); // a camada aponta para o modelo que acabou de ser descartado
     };
-  }, [config, mapRef, onAnchorResolved, onStatusChange]);
+  }, [config, onStatusChange]);
 
   // 2) Posicionar: cada ajuste do painel só recalcula a matriz
   useEffect(() => {
