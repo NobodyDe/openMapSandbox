@@ -48,6 +48,10 @@ export function useConversionJobs(onDone: (itemId: string, result: JobResult) =>
   async function waitForResult(itemId: string, jobId: string, signal: AbortSignal): Promise<JobResult | null> {
     while (!signal.aborted) {
       const status = await getJob(jobId);
+      if (!status) {
+        await wait(POLL_INTERVAL_MS);
+        continue;
+      }
       if (status.state === "done" && status.result) return status.result;
       if (status.state === "error") throw new Error(status.message ?? "Erro na conversão.");
       setItemActivity(itemId, conversionActivity(status));

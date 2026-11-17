@@ -69,8 +69,11 @@ export async function startConvert(jobId: string): Promise<void> {
   await request(`/api/jobs/${jobId}/convert`, { method: "POST" });
 }
 
-export async function getJob(jobId: string): Promise<JobStatus> {
-  const response = await send(`/api/jobs/${jobId}`);
+// null = servidor fora do ar por um instante (reiniciando): quem consulta tenta de novo.
+// A conversão está no Redis e continua quando ele voltar
+export async function getJob(jobId: string): Promise<JobStatus | null> {
+  const response = await fetch(`/api/jobs/${jobId}`).catch(() => null);
+  if (!response || response.status >= 500) return null;
   // Envio interrompido por um reinício, ou job já apagado (passou de 24 h)
   if (response.status === 404) throw new Error("Envio não encontrado no servidor. Importe de novo.");
   return (await ensureOk(response)).json();

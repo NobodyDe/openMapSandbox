@@ -59,13 +59,19 @@ function toStatus(job: ConversionJob, state: string): JobStatus {
   return { state: "queued", progress: null }; // waiting, delayed, prioritized
 }
 
-// Sem Redis, o erro do cliente é técnico; o usuário vê o que fazer
-async function orUnavailable<T>(work: Promise<T>): Promise<T> {
+function unavailable(): Error {
+  return Object.assign(new Error(UNAVAILABLE), { statusCode: 503 });
+}
+
+// Sem Redis, o BullMQ espera a conexão para sempre (e a rota nunca responde); aqui falha na hora,
+// com uma frase que diz ao usuário o que fazer no lugar do erro técnico do cliente
+async function orUnavailable<T>(client: Redis, work: () => Promise<T>): Promise<T> {
+  if (client.status !== "ready") throw unavailable();
   try {
-    return await work;
+    return await work();
   } catch (error) {
     console.error(error);
-    throw Object.assign(new Error(UNAVAILABLE), { statusCode: 503 });
+    throw unavailable();
   }
 }
 
@@ -73,7 +79,7 @@ async function orUnavailable<T>(work: Promise<T>): Promise<T> {
 // Conversão interrompida por queda do processo volta sozinha para a fila quando o servidor sobe (job travado)
 export function createConversionQueue(config: Config): ConversionQueue {
   // O BullMQ 6 em ESM não cria o cliente Redis sozinho: recebe um pronto e não o fecha (ver close).
-  // enableOfflineQueue: false — sem Redis, o add falha na hora em vez de esperar a conexão para sempre
+  // enableOfflineQueue: false — se a conexão cair no meio de um comando, ele falha em vez de esperar
   const queueClient = new Redis(config.redisUrl, { enableOfflineQueue: false });
   const workerClient = new Redis(config.redisUrl, { maxRetriesPerRequest: null }); // exigido pelo Worker
   const queue = new Queue<ConversionData, JobResult>(QUEUE_NAME, { connection: queueClient });
@@ -88,20 +94,20 @@ export function createConversionQueue(config: Config): ConversionQueue {
 
   async function add(jobId: string, ext: string): Promise<void> {
     const options = { jobId, attempts: 1, removeOnComplete: { age: DAY_S }, removeOnFail: { age: DAY_S } };
-    await orUnavailable(queue.add("convert", { ext }, options));
+    await orUnavailable(queueClient, () => queue.add("convert", { ext }, options));
   }
 
   async function status(jobId: string): Promise<JobStatus | null> {
-    const job = await orUnavailable(queue.getJob(jobId));
-    if (!job) return null;
-    return toStatus(job, await orUnavailable(job.getState()));
+    return orUnavailable(queueClient, async () => {
+      const job = await queue.getJob(jobId);
+      return job ? toStatus(job, await job.getState()) : null;
+    });
   }
 
   // Em andamento: o cancelJob dispara o AbortSignal do conversor. Na fila ou já terminado: sai do Redis
   async function cancel(jobId: string): Promise<void> {
     if (worker.cancelJob(jobId, "Conversão cancelada.")) return;
-    const job = await orUnavailable(queue.getJob(jobId));
-    await job?.remove();
+    await orUnavailable(queueClient, async () => (await queue.getJob(jobId))?.remove());
   }
 
   async function close(): Promise<void> {
