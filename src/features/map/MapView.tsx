@@ -37,6 +37,7 @@ import { Layers } from "lucide-react";
 import { mapItems } from "../projects/elements";
 import { useProjects } from "../projects/useProjects";
 import { useVisibleItems } from "../projects/useVisibleItems";
+import { ProjectMarker } from "../projects/ProjectMarker";
 import { ProjectsPanel } from "../projects/ProjectsPanel";
 import type { LngLat, Project } from "../projects/types";
 import {
@@ -61,7 +62,19 @@ const GlobeGlowLayer = lazy(() => import("../globeGlow/GlobeGlowLayer"));
 const BASEMAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
 const BRAZIL_VIEW = { longitude: -47.93, latitude: -15.78, zoom: 4 };
 const MUNICIPALITY_MIN_ZOOM = 6; // abaixo disso as divisas viram "ruído" visual
-const PROJECT_ZOOM = 16; // voo até o projeto
+const PROJECT_ZOOM = 16; // voo até o projeto; dali para perto o marcador cobriria o modelo
+
+// De perto, o marcador some se o projeto tem modelo ou nuvem ligado: estaria em cima dele
+function showsMarker(
+  project: Project,
+  closeZoom: boolean,
+  hiddenIds: ReadonlySet<string>,
+): boolean {
+  if (!closeZoom) return true;
+  return !project.layers.some(
+    (layer) => layer.kind === "model" && !hiddenIds.has(layer.id),
+  );
+}
 
 export function MapView() {
   const {
@@ -78,7 +91,7 @@ export function MapView() {
   const [layersOpen, setLayersOpen] = useState(false);
   // Projetos, camadas e visibilidade: o painel edita, o mapa desenha
   const projectsState = useProjects();
-  const { projects, hiddenIds, adoptLocation } = projectsState;
+  const { projects, hiddenIds, hiddenMarkers, adoptLocation } = projectsState;
   const { points, trechos, models: allModels } = useMemo(
     () => mapItems(projects),
     [projects],
@@ -104,7 +117,8 @@ export function MapView() {
   const [modelStatus, setModelStatus] = useState<Record<string, ModelStatus>>(
     {},
   );
-  const [focusProjectId] = useState<string | null>(null);
+  const [focusProjectId, setFocusProjectId] = useState<string | null>(null);
+  const [closeZoom, setCloseZoom] = useState(false); // zoom >= PROJECT_ZOOM
   // "Marcar no mapa": com uma função aqui, o próximo clique no mapa vira o local do projeto
   const [pickLocation, setPickLocation] = useState<
     ((point: LngLat) => void) | null
@@ -154,6 +168,18 @@ export function MapView() {
         center: [location.lng, location.lat],
         zoom: PROJECT_ZOOM,
       });
+  }
+
+  // Marcador clicado: painel aberto no projeto e voo até ele
+  function openProject(project: Project) {
+    setLayersOpen(true);
+    setFocusProjectId(project.id);
+    flyToProject(project);
+  }
+
+  function closePanel() {
+    setLayersOpen(false);
+    setFocusProjectId(null);
   }
 
   // Esc cancela o "Marcar no mapa"
@@ -240,7 +266,7 @@ export function MapView() {
         <MapControlButton
           label={layersOpen ? "Fechar camadas" : "Camadas"}
           pressed={layersOpen}
-          onClick={() => setLayersOpen((open) => !open)}
+          onClick={() => (layersOpen ? closePanel() : setLayersOpen(true))}
         >
           <Layers size={CONTROL_ICON_SIZE} />
         </MapControlButton>
@@ -264,7 +290,7 @@ export function MapView() {
           onPickLocation={(onPicked) => setPickLocation(() => onPicked)}
           onFlyTo={flyToProject}
           renderModelDetails={renderModelDetails}
-          onClose={() => setLayersOpen(false)}
+          onClose={closePanel}
         />
       )}
       <MapGL
@@ -281,6 +307,8 @@ export function MapView() {
         cursor={pickLocation ? "crosshair" : hoveredId ? "pointer" : undefined}
         onMouseMove={onMouseMove}
         onMouseLeave={onMouseLeave}
+        // o React ignora o set com o mesmo valor: só re-renderiza quando o zoom cruza o limite
+        onZoom={(event) => setCloseZoom(event.viewState.zoom >= PROJECT_ZOOM)}
         onClick={(event) => {
           if (!pickLocation) return onClick(event);
           pickLocation({ lng: event.lngLat.lng, lat: event.lngLat.lat });
@@ -341,6 +369,21 @@ export function MapView() {
             />
           ))}
         </Suspense>
+
+        {projects
+          .filter(
+            (project) =>
+              !hiddenMarkers.has(project.id) &&
+              showsMarker(project, closeZoom, hiddenIds),
+          )
+          .map((project) => (
+            <ProjectMarker
+              key={project.id}
+              project={project}
+              selected={project.id === focusProjectId}
+              onClick={() => openProject(project)}
+            />
+          ))}
 
         <NavigationControl position="top-right" />
         <GeolocateControl position="top-right" />
