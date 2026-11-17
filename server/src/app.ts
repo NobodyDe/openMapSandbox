@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
@@ -31,5 +32,8 @@ export function buildApp(config: Config): FastifyInstance {
   // serve: false — só traz o reply.sendFile; cada job diz de qual pasta servir
   app.register(fastifyStatic, { root: config.tmpRoot, serve: false });
   registerJobRoutes(app, createJobStore(config.tmpRoot), createQueue(jobConverter(config)));
+  // Fora do desenvolvimento, o próprio servidor entrega o frontend compilado: mesma origem, sem CORS.
+  // decorateReply: false — o reply.sendFile já veio do registro acima
+  if (existsSync(config.distDir)) app.register(fastifyStatic, { root: config.distDir, decorateReply: false });
   return app;
 }

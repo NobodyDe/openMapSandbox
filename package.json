@@ -9,6 +9,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
+    "start": "pnpm build && pnpm --dir server start",
     "test": "node --test tests/*.test.ts && pnpm --dir server test"
   },
   "dependencies": {
